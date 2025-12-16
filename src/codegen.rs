@@ -387,6 +387,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     }
     // impl parse_prefix
     code.push_str(&format!("impl {} {{\n    zc_parse_prefix!();\n", msg.name));
+    optional_methods_for_fields(&mut code, &fields, schema, opts, "self");
     if !data_fields.is_empty() {
         for d in &data_fields {
             let fn_name = d.name.to_snake_case();
@@ -406,6 +407,8 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         let entry_view = format!("{}EntryView", group_name);
         let group_struct = format!("{}Group", group_name);
         let iter_name = format!("{}Iter", group_name);
+        let g_fields = group_fields(g);
+        let g_data = group_data(g);
         let dim = dimension_fields(schema, &g.dimension_type, opts);
         let block_len_expr = if let Some(bl) = g.block_length {
             bl.to_string()
@@ -455,8 +458,8 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         if has_var_data {
             code.push_str(&format!(
                 "        static DATA_KINDS: [LengthKind; {}] = [{}];\n",
-                group_data(g).len(),
-                group_data(g)
+                g_data.len(),
+                g_data
                     .iter()
                     .map(|d| length_kind_token(length_kind_for_data(&d.ty, schema, opts)))
                     .collect::<Vec<_>>()
@@ -494,7 +497,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
             "#[derive(Debug, Clone, Copy)]\npub struct {}<'a> {{\n    pub body: &'a {},\n",
             entry_view, entry_struct
         ));
-        for d in group_data(g) {
+        for d in &g_data {
             code.push_str(&format!(
                 "    pub {}: VarData<'a>,\n",
                 d.name.to_snake_case()
@@ -507,7 +510,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
             "#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]\n",
         );
         code.push_str(&format!("pub struct {} {{\n", entry_struct));
-        for field in group_fields(g) {
+        for field in &g_fields {
             if field.presence.as_deref() == Some("constant") {
                 continue;
             }
@@ -518,13 +521,18 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
             }
         }
         code.push_str("}\n\n");
+        if !g_fields.is_empty() {
+            code.push_str(&format!("impl {} {{\n", entry_struct));
+            optional_methods_for_fields(&mut code, &g_fields, schema, opts, "self");
+            code.push_str("}\n\n");
+        }
 
         if has_var_data {
             code.push_str(&format!(
                 "impl<'a> Iterator for {}<'a> {{\n    type Item = {}<'a>;\n    fn next(&mut self) -> Option<Self::Item> {{\n        if self.entries_left == 0 {{\n            return None;\n        }}\n        let (body, rest) = Ref::<_, {}>::from_prefix(self.remaining).ok()?;\n        let mut tail = rest;\n",
                 iter_name, entry_view, entry_struct
             ));
-            for (idx, d) in group_data(g).iter().enumerate() {
+            for (idx, d) in g_data.iter().enumerate() {
                 code.push_str(&format!(
                     "        let ({}_{}, after_{}) = parse_var_data(tail, *self.data_kinds.get({})?)?;\n        tail = after_{};\n",
                     d.name.to_snake_case(),
@@ -538,7 +546,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
                 "        self.remaining = tail;\n        self.entries_left -= 1;\n        Some(",
             );
             code.push_str(&format!("{} {{ body: Ref::into_ref(body)", entry_view));
-            for (idx, d) in group_data(g).iter().enumerate() {
+            for (idx, d) in g_data.iter().enumerate() {
                 code.push_str(&format!(
                     ", {}: {}_{}",
                     d.name.to_snake_case(),
@@ -759,5 +767,156 @@ fn to_usize_expr(field_name: &str, ty: &str) -> String {
             format!("{} as usize", field_name)
         }
         _ => format!("{}.get() as usize", field_name),
+    }
+}
+
+fn field_primitive(field: &Field, schema: &Schema) -> Option<String> {
+    if let Some(td) = schema.types.get(&field.ty) {
+        match td {
+            TypeDef::Primitive { primitive, .. } => Some(primitive.clone()),
+            TypeDef::Enum { encoding, .. } | TypeDef::Set { encoding, .. } => {
+                Some(encoding.clone())
+            }
+            TypeDef::Composite { .. } => None,
+        }
+    } else {
+        Some(field.ty.clone())
+    }
+}
+
+fn optional_null_literal(prim: &str) -> Option<&'static str> {
+    match prim {
+        "boolean" | "uint8" | "char" => Some("u8::MAX"),
+        "int8" => Some("i8::MIN"),
+        "uint16" => Some("u16::MAX"),
+        "int16" => Some("i16::MIN"),
+        "uint32" => Some("u32::MAX"),
+        "int32" => Some("i32::MIN"),
+        "uint64" => Some("u64::MAX"),
+        "int64" => Some("i64::MIN"),
+        "float" => Some("f32::NAN"),
+        "double" => Some("f64::NAN"),
+        _ => None,
+    }
+}
+
+fn optional_host_type(prim: &str) -> Option<&'static str> {
+    match prim {
+        "boolean" | "uint8" | "char" => Some("u8"),
+        "int8" => Some("i8"),
+        "uint16" => Some("u16"),
+        "int16" => Some("i16"),
+        "uint32" => Some("u32"),
+        "int32" => Some("i32"),
+        "uint64" => Some("u64"),
+        "int64" => Some("i64"),
+        "float" => Some("f32"),
+        "double" => Some("f64"),
+        _ => None,
+    }
+}
+
+fn scalar_expr(expr: &str, rust_type: &str) -> Option<String> {
+    match rust_type {
+        "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64" | "f32" | "f64" => {
+            Some(expr.to_string())
+        }
+        "U16" | "I16" | "U32" | "I32" | "U64" | "I64" | "F32" | "F64" => {
+            Some(format!("{}.get()", expr))
+        }
+        _ => None,
+    }
+}
+
+fn optional_methods_for_fields(
+    code: &mut String,
+    fields: &[&Field],
+    schema: &Schema,
+    opts: &GeneratorOptions,
+    self_expr: &str,
+) {
+    for field in fields {
+        if field.presence.as_deref() != Some("optional") {
+            continue;
+        }
+        let field_name = field.name.to_snake_case();
+        let method_name = format!("{}_opt", field_name);
+
+        let resolved_type = match resolve_type(&field.ty, schema, opts) {
+            Some(t) => t,
+            None => continue,
+        };
+
+        // Enum/set optional: return Option<EnumName> by inspecting the inner primitive
+        if let Some(TypeDef::Enum { encoding, .. } | TypeDef::Set { encoding, .. }) =
+            schema.types.get(&field.ty)
+        {
+            let inner_rust = match primitive_to_rust(encoding, opts) {
+                Some(t) => t,
+                None => continue,
+            };
+            if let Some(val_expr) =
+                scalar_expr(&format!("{}.{}.0", self_expr, field_name), &inner_rust)
+            {
+                let host_type = match optional_host_type(encoding) {
+                    Some(t) => t,
+                    None => continue,
+                };
+                let null_val = match optional_null_literal(encoding) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let cond = if host_type == "f32" || host_type == "f64" {
+                    "raw.is_nan()".to_string()
+                } else {
+                    format!("raw == {}", null_val)
+                };
+                code.push_str(&format!(
+                    "    pub fn {method}(&self) -> Option<{ty}> {{\n        let v = {self_expr}.{field};\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(v) }}\n    }}\n",
+                    method = method_name,
+                    ty = field.ty,
+                    self_expr = self_expr,
+                    field = field_name,
+                    val = val_expr,
+                    cond = cond,
+                ));
+            }
+            continue;
+        }
+
+        let prim = match field_primitive(field, schema) {
+            Some(p) => p,
+            None => continue,
+        };
+        let null_val = match optional_null_literal(&prim) {
+            Some(v) => v,
+            None => continue,
+        };
+        let host_type = match optional_host_type(&prim) {
+            Some(t) => t,
+            None => continue,
+        };
+
+        let scalar = scalar_expr(&format!("{}.{}", self_expr, field_name), &resolved_type);
+        if let Some(val_expr) = scalar {
+            let body = if host_type == "f32" || host_type == "f64" {
+                format!(
+                    "let v = {val}; if v.is_nan() {{ None }} else {{ Some(v) }}",
+                    val = val_expr
+                )
+            } else {
+                format!(
+                    "let v = {val}; if v == {null} {{ None }} else {{ Some(v) }}",
+                    val = val_expr,
+                    null = null_val
+                )
+            };
+            code.push_str(&format!(
+                "    pub fn {method}(&self) -> Option<{ty}> {{ {body} }}\n",
+                method = method_name,
+                ty = host_type,
+                body = body,
+            ));
+        }
     }
 }

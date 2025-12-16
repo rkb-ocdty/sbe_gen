@@ -72,3 +72,27 @@ fn generates_groups_and_var_data() {
     assert!(book_rs.contains("VarData<'a>"));
     assert!(book_rs.contains("pub fn parse_raw"));
 }
+
+#[test]
+fn optional_fields_expose_option_helpers() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <composite name="Comp">
+                    <type name="a" primitiveType="int32" />
+                    <type name="b" primitiveType="int32" />
+                </composite>
+            </types>
+            <message name="Opt" id="1" blockLength="12">
+                <field name="req" id="1" type="uint32" presence="required" />
+                <field name="maybe_price" id="2" type="int64" presence="optional" />
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let opt_rs = module_map.get("opt.rs").expect("opt.rs emitted");
+    assert!(opt_rs.contains("pub maybe_price: I64"));
+    assert!(opt_rs.contains("pub fn maybe_price_opt"));
+}

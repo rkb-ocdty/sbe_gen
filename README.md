@@ -27,6 +27,9 @@ code generation for other languages.
 * **Groups and variable data included:** Nested repeating groups are
   emitted with iterable views and entry structs, and `data` fields
   become `VarData` slices with an ergonomic `as_str()` helper.
+* **Optional fields:** `presence="optional"` fields stay zero‑copy but
+  gain `<field>_opt()` accessors that return `Option` based on the SBE
+  null value for that primitive.
 * **Schema reflection:** Support for SBE primitives, enums, sets,
   composites, groups and variable‑length data.
 
@@ -61,7 +64,7 @@ imports and the `zc_parse_prefix!` macro.  For example, given a
 message header like:
 
 ```xml
-<message name="CmePacketHdr" id="0" blockLength="12">
+<message name="PacketHdr" id="0" blockLength="12">
   <field name="seq" id="1" type="uint32" />
   <field name="sending_time" id="2" type="uint64" />
 </message>
@@ -87,12 +90,12 @@ macro_rules! zc_parse_prefix {
 
 #[repr(C)]
 #[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]
-pub struct CmePacketHdr {
+pub struct PacketHdr {
     pub seq: U32,
     pub sending_time: U64,
 }
 
-impl CmePacketHdr {
+impl PacketHdr {
     zc_parse_prefix!();
 }
 ```
