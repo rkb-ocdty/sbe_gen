@@ -71,6 +71,7 @@ fn generates_groups_and_var_data() {
     assert!(book_rs.contains("LevelsEntryView"));
     assert!(book_rs.contains("VarData<'a>"));
     assert!(book_rs.contains("pub fn parse_raw"));
+    assert!(module_map.contains_key("message_header.rs"));
 }
 
 #[test]
