@@ -96,6 +96,7 @@ fn optional_fields_expose_option_helpers() {
     let opt_rs = module_map.get("opt.rs").expect("opt.rs emitted");
     assert!(opt_rs.contains("pub maybe_price: I64"));
     assert!(opt_rs.contains("pub fn maybe_price_opt"));
+    assert!(opt_rs.contains("MAYBE_PRICE_SINCE_VERSION"));
 }
 
 #[test]
@@ -130,4 +131,5 @@ fn generates_nested_groups() {
     assert!(outer_rs.contains("skip_children"));
     assert!(outer_rs.contains("ParentsEntryView"));
     assert!(outer_rs.contains("pub children: ChildrenGroup"));
+    assert!(outer_rs.contains("SINCE_VERSION"));
 }

@@ -442,6 +442,29 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     // impl parse_prefix
     code.push_str(&format!("impl {} {{\n    zc_parse_prefix!();\n", msg.name));
     optional_methods_for_fields(&mut code, &fields, schema, opts, "self");
+    // message metadata
+    let msg_since = msg.since_version.unwrap_or(0);
+    let msg_sem = msg.semantic_type.clone().unwrap_or_default();
+    code.push_str(&format!("    pub const SINCE_VERSION: u32 = {};\n", msg_since));
+    code.push_str(&format!(
+        "    pub const SEMANTIC_TYPE: &'static str = \"{}\";\n",
+        msg_sem
+    ));
+    // field metadata
+    for f in &fields {
+        let sv = f.since_version.unwrap_or(0);
+        let sem = f.semantic_type.clone().unwrap_or_default();
+        code.push_str(&format!(
+            "    pub const {}_SINCE_VERSION: u32 = {};\n",
+            f.name.to_uppercase(),
+            sv
+        ));
+        code.push_str(&format!(
+            "    pub const {}_SEMANTIC_TYPE: &'static str = \"{}\";\n",
+            f.name.to_uppercase(),
+            sem
+        ));
+    }
     if !data_fields.is_empty() {
         for d in &data_fields {
             let fn_name = d.name.to_snake_case();
@@ -646,6 +669,15 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         group_struct, g.dimension_type
     ));
     code.push_str(&format!("impl<'a> {}<'a> {{\n", group_struct));
+    if let Some(sv) = g.since_version {
+        code.push_str(&format!("    pub const SINCE_VERSION: u32 = {};\n", sv));
+    }
+    if let Some(ref sem) = g.semantic_type {
+        code.push_str(&format!(
+            "    pub const SEMANTIC_TYPE: &'static str = \"{}\";\n",
+            sem
+        ));
+    }
     code.push_str(&format!(
         "    pub fn count(&self) -> usize {{ {} }}\n",
         to_usize_expr(
@@ -730,6 +762,22 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     if !g_fields.is_empty() {
         code.push_str(&format!("impl {} {{\n", entry_struct));
         optional_methods_for_fields(code, &g_fields, schema, opts, "self");
+        for f in &g_fields {
+            if let Some(sv) = f.since_version {
+                code.push_str(&format!(
+                    "    pub const {}_SINCE_VERSION: u32 = {};\n",
+                    f.name.to_uppercase(),
+                    sv
+                ));
+            }
+            if let Some(ref sem) = f.semantic_type {
+                code.push_str(&format!(
+                    "    pub const {}_SEMANTIC_TYPE: &'static str = \"{}\";\n",
+                    f.name.to_uppercase(),
+                    sem
+                ));
+            }
+        }
         code.push_str("}\n\n");
     }
 

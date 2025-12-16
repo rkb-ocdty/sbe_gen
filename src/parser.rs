@@ -80,6 +80,10 @@ pub struct Message {
     /// The optional block length attribute.
     #[allow(dead_code)]
     pub block_length: Option<u32>,
+    /// sinceVersion of the message.
+    pub since_version: Option<u32>,
+    /// semanticType if provided.
+    pub semantic_type: Option<String>,
     /// All message members (fields, groups, variable data) in order.
     pub members: Vec<MessageMember>,
 }
@@ -107,6 +111,10 @@ pub struct Group {
     pub dimension_type: String,
     /// Members inside the group (fields, nested groups and data) in order.
     pub members: Vec<GroupMember>,
+    /// sinceVersion of the group.
+    pub since_version: Option<u32>,
+    /// semanticType of the group if provided.
+    pub semantic_type: Option<String>,
 }
 
 /// Members allowed within a group.
@@ -130,6 +138,10 @@ pub struct Field {
     pub ty: String,
     /// The presence attribute if specified.
     pub presence: Option<String>,
+    /// The sinceVersion attribute if specified.
+    pub since_version: Option<u32>,
+    /// The semanticType attribute if specified.
+    pub semantic_type: Option<String>,
     /// The valueRef attribute if present (constants).
     pub value_ref: Option<String>,
 }
@@ -142,6 +154,12 @@ pub struct VarDataField {
     /// The optional field id.
     #[allow(dead_code)]
     pub id: Option<u32>,
+    /// sinceVersion of the data field.
+    #[allow(dead_code)]
+    pub since_version: Option<u32>,
+    /// semanticType if provided.
+    #[allow(dead_code)]
+    pub semantic_type: Option<String>,
     /// The encoding type used for the length prefix.
     pub ty: String,
 }
@@ -319,6 +337,8 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                 let mname = attr_req(&child, "name", "message")?;
                 let mid = attr_opt_u32(&child, "id", &mname)?;
                 let block_length = attr_opt_u32(&child, "blockLength", &mname)?;
+                let since_version = attr_opt_u32(&child, "sinceVersion", &mname)?;
+                let semantic_type = child.attribute("semanticType").map(|s| s.to_string());
                 let mut members = Vec::new();
                 for f in child.children() {
                     if !f.is_element() {
@@ -331,12 +351,16 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                             let fid = attr_opt_u32(&f, "id", &fname)?;
                             let ftype = attr_req(&f, "type", &fname)?;
                             let presence = f.attribute("presence").map(|s| s.to_string());
+                            let since_version = attr_opt_u32(&f, "sinceVersion", &fname)?;
+                            let semantic_type = f.attribute("semanticType").map(|s| s.to_string());
                             let value_ref = f.attribute("valueRef").map(|s| s.to_string());
                             members.push(MessageMember::Field(Field {
                                 name: fname,
                                 id: fid,
                                 ty: ftype.to_string(),
                                 presence,
+                                since_version,
+                                semantic_type,
                                 value_ref,
                             }));
                         }
@@ -349,8 +373,10 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                             let id = attr_opt_u32(&f, "id", &name)?;
                             let ty = attr_req(&f, "type", &name)?;
                             members.push(MessageMember::Data(VarDataField {
-                                name,
+                                name: name.clone(),
                                 id,
+                                since_version: attr_opt_u32(&f, "sinceVersion", &name)?,
+                                semantic_type: f.attribute("semanticType").map(|s| s.to_string()),
                                 ty: ty.to_string(),
                             }));
                         }
@@ -361,6 +387,8 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                     name: mname,
                     id: mid.unwrap_or(0),
                     block_length,
+                    since_version,
+                    semantic_type,
                     members,
                 });
             }
@@ -402,6 +430,8 @@ fn parse_group(node: &roxmltree::Node, parent_name: &str) -> Result<Group, Parse
     let id = attr_opt_u32(node, "id", &name)?;
     let block_length = attr_opt_u32(node, "blockLength", &name)?;
     let dimension_type = attr_req(node, "dimensionType", &name)?;
+    let since_version = attr_opt_u32(node, "sinceVersion", &name)?;
+    let semantic_type = node.attribute("semanticType").map(|s| s.to_string());
     let mut members = Vec::new();
     for child in node.children() {
         if !child.is_element() {
@@ -419,10 +449,12 @@ fn parse_group(node: &roxmltree::Node, parent_name: &str) -> Result<Group, Parse
                 let presence = child.attribute("presence").map(|s| s.to_string());
                 let value_ref = child.attribute("valueRef").map(|s| s.to_string());
                 members.push(GroupMember::Field(Field {
-                    name: fname,
+                    name: fname.clone(),
                     id: fid,
                     ty: ftype.to_string(),
                     presence,
+                    since_version: attr_opt_u32(&child, "sinceVersion", &fname)?,
+                    semantic_type: child.attribute("semanticType").map(|s| s.to_string()),
                     value_ref,
                 }));
             }
@@ -439,8 +471,10 @@ fn parse_group(node: &roxmltree::Node, parent_name: &str) -> Result<Group, Parse
                 let did = attr_opt_u32(&child, "id", &dname)?;
                 let ty = attr_req(&child, "type", &dname)?;
                 members.push(GroupMember::Data(VarDataField {
-                    name: dname,
+                    name: dname.clone(),
                     id: did,
+                    since_version: attr_opt_u32(&child, "sinceVersion", &dname)?,
+                    semantic_type: child.attribute("semanticType").map(|s| s.to_string()),
                     ty: ty.to_string(),
                 }));
             }
@@ -453,5 +487,7 @@ fn parse_group(node: &roxmltree::Node, parent_name: &str) -> Result<Group, Parse
         block_length,
         dimension_type,
         members,
+        since_version,
+        semantic_type,
     })
 }
