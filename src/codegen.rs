@@ -464,6 +464,34 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
                 off
             ));
         }
+        if let Some(ref minv) = f.min_value {
+            code.push_str(&format!(
+                "    pub const {}_MIN: &str = \"{}\";\n",
+                f.name.to_uppercase(),
+                minv
+            ));
+        }
+        if let Some(ref maxv) = f.max_value {
+            code.push_str(&format!(
+                "    pub const {}_MAX: &str = \"{}\";\n",
+                f.name.to_uppercase(),
+                maxv
+            ));
+        }
+        if let Some(ref nullv) = f.null_value {
+            code.push_str(&format!(
+                "    pub const {}_NULL: &str = \"{}\";\n",
+                f.name.to_uppercase(),
+                nullv
+            ));
+        }
+        if let Some(ref initv) = f.initial_value {
+            code.push_str(&format!(
+                "    pub const {}_INITIAL: &str = \"{}\";\n",
+                f.name.to_uppercase(),
+                initv
+            ));
+        }
         code.push_str(&format!(
             "    pub const {}_SINCE_VERSION: u32 = {};\n",
             f.name.to_uppercase(),
@@ -809,20 +837,25 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         code.push_str(&format!("impl {} {{\n", entry_struct));
         optional_methods_for_fields(code, &g_fields, schema, opts, "self");
         for f in &g_fields {
-            if let Some(sv) = f.since_version {
+            if let Some(off) = f.offset {
                 code.push_str(&format!(
-                    "    pub const {}_SINCE_VERSION: u32 = {};\n",
+                    "    pub const {}_OFFSET: u32 = {};\n",
                     f.name.to_uppercase(),
-                    sv
+                    off
                 ));
             }
-            if let Some(ref sem) = f.semantic_type {
-                code.push_str(&format!(
-                    "    pub const {}_SEMANTIC_TYPE: &'static str = \"{}\";\n",
-                    f.name.to_uppercase(),
-                    sem
-                ));
-            }
+            let sv = f.since_version.unwrap_or(0);
+            let sem = f.semantic_type.clone().unwrap_or_default();
+            code.push_str(&format!(
+                "    pub const {}_SINCE_VERSION: u32 = {};\n",
+                f.name.to_uppercase(),
+                sv
+            ));
+            code.push_str(&format!(
+                "    pub const {}_SEMANTIC_TYPE: &'static str = \"{}\";\n",
+                f.name.to_uppercase(),
+                sem
+            ));
         }
         code.push_str("}\n\n");
     }

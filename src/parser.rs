@@ -140,6 +140,14 @@ pub struct Field {
     pub offset: Option<u32>,
     /// Per-field byte order override.
     pub byte_order: Option<String>,
+    /// minValue attribute if provided.
+    pub min_value: Option<String>,
+    /// maxValue attribute if provided.
+    pub max_value: Option<String>,
+    /// nullValue attribute if provided.
+    pub null_value: Option<String>,
+    /// initialValue attribute if provided.
+    pub initial_value: Option<String>,
     /// The presence attribute if specified.
     pub presence: Option<String>,
     /// The sinceVersion attribute if specified.
@@ -356,6 +364,10 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                             let ftype = attr_req(&f, "type", &fname)?;
                             let offset = attr_opt_u32(&f, "offset", &fname)?;
                             let byte_order = f.attribute("byteOrder").map(|s| s.to_string());
+                            let min_value = f.attribute("minValue").map(|s| s.to_string());
+                            let max_value = f.attribute("maxValue").map(|s| s.to_string());
+                            let null_value = f.attribute("nullValue").map(|s| s.to_string());
+                            let initial_value = f.attribute("initialValue").map(|s| s.to_string());
                             let presence = f.attribute("presence").map(|s| s.to_string());
                             let since_version = attr_opt_u32(&f, "sinceVersion", &fname)?;
                             let semantic_type = f.attribute("semanticType").map(|s| s.to_string());
@@ -366,6 +378,10 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                 ty: ftype.to_string(),
                                 offset,
                                 byte_order,
+                                min_value,
+                                max_value,
+                                null_value,
+                                initial_value,
                                 presence,
                                 since_version,
                                 semantic_type,
@@ -464,6 +480,10 @@ fn parse_group(node: &roxmltree::Node, parent_name: &str) -> Result<Group, Parse
                     ty: ftype.to_string(),
                     offset,
                     byte_order,
+                    min_value: child.attribute("minValue").map(|s| s.to_string()),
+                    max_value: child.attribute("maxValue").map(|s| s.to_string()),
+                    null_value: child.attribute("nullValue").map(|s| s.to_string()),
+                    initial_value: child.attribute("initialValue").map(|s| s.to_string()),
                     presence,
                     since_version: attr_opt_u32(&child, "sinceVersion", &fname)?,
                     semantic_type: child.attribute("semanticType").map(|s| s.to_string()),
