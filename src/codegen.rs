@@ -567,13 +567,50 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         {
             let param_ty = builder_param_type(&resolved_type);
             let encoded_expr = builder_value_expr("value", &resolved_type);
-            code.push_str(&format!(
-                "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_at(&mut self.buf, {offset}usize, &encoded);\n        self\n    }}\n",
-                name = field_name,
-                param = param_ty,
-                expr = encoded_expr,
-                offset = offset
-            ));
+            if let (Some(host_ty), Some(raw_expr)) =
+                (host_type_for_field(field, schema), raw_expr_for_value(field, "value", schema, opts))
+            {
+                code.push_str(&format!("    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let raw: {host} = {raw};\n", name = field_name, param = param_ty, host = host_ty, raw = raw_expr));
+                if let Some(ref minv) = field.min_value {
+                    code.push_str(&format!(
+                        "        let min: {host} = \"{minv}\".parse().expect(\"minValue parse\");\n        assert!(raw >= min, \"{field} below minValue\");\n",
+                        host = host_ty,
+                        minv = minv,
+                        field = field.name
+                    ));
+                }
+                if let Some(ref maxv) = field.max_value {
+                    code.push_str(&format!(
+                        "        let max: {host} = \"{maxv}\".parse().expect(\"maxValue parse\");\n        assert!(raw <= max, \"{field} above maxValue\");\n",
+                        host = host_ty,
+                        maxv = maxv,
+                        field = field.name
+                    ));
+                }
+                if field.presence.as_deref() != Some("optional") {
+                    if let Some(ref nullv) = field.null_value {
+                        code.push_str(&format!(
+                            "        let null_val: {host} = \"{nullv}\".parse().expect(\"nullValue parse\");\n        assert!(raw != null_val, \"{field} uses nullValue but field is required\");\n",
+                            host = host_ty,
+                            nullv = nullv,
+                            field = field.name
+                        ));
+                    }
+                }
+                code.push_str(&format!(
+                    "        let encoded = {expr};\n        write_bytes_at(&mut self.buf, {offset}usize, &encoded);\n        self\n    }}\n",
+                    expr = encoded_expr,
+                    offset = offset
+                ));
+            } else {
+                code.push_str(&format!(
+                    "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_at(&mut self.buf, {offset}usize, &encoded);\n        self\n    }}\n",
+                    name = field_name,
+                    param = param_ty,
+                    expr = encoded_expr,
+                    offset = offset
+                ));
+            }
         }
     }
     for g in &groups {
@@ -1174,13 +1211,50 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         {
             let param_ty = builder_param_type(&resolved_type);
             let encoded_expr = builder_value_expr("value", &resolved_type);
-            code.push_str(&format!(
-                "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_at(self.buf, self.start + {offset}usize, &encoded);\n        self\n    }}\n",
-                name = field.name.to_snake_case(),
-                param = param_ty,
-                expr = encoded_expr,
-                offset = offset
-            ));
+            if let (Some(host_ty), Some(raw_expr)) =
+                (host_type_for_field(field, schema), raw_expr_for_value(field, "value", schema, opts))
+            {
+                code.push_str(&format!("    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let raw: {host} = {raw};\n", name = field.name.to_snake_case(), param = param_ty, host = host_ty, raw = raw_expr));
+                if let Some(ref minv) = field.min_value {
+                    code.push_str(&format!(
+                        "        let min: {host} = \"{minv}\".parse().expect(\"minValue parse\");\n        assert!(raw >= min, \"{field} below minValue\");\n",
+                        host = host_ty,
+                        minv = minv,
+                        field = field.name
+                    ));
+                }
+                if let Some(ref maxv) = field.max_value {
+                    code.push_str(&format!(
+                        "        let max: {host} = \"{maxv}\".parse().expect(\"maxValue parse\");\n        assert!(raw <= max, \"{field} above maxValue\");\n",
+                        host = host_ty,
+                        maxv = maxv,
+                        field = field.name
+                    ));
+                }
+                if field.presence.as_deref() != Some("optional") {
+                    if let Some(ref nullv) = field.null_value {
+                        code.push_str(&format!(
+                            "        let null_val: {host} = \"{nullv}\".parse().expect(\"nullValue parse\");\n        assert!(raw != null_val, \"{field} uses nullValue but field is required\");\n",
+                            host = host_ty,
+                            nullv = nullv,
+                            field = field.name
+                        ));
+                    }
+                }
+                code.push_str(&format!(
+                    "        let encoded = {expr};\n        write_bytes_at(self.buf, self.start + {offset}usize, &encoded);\n        self\n    }}\n",
+                    expr = encoded_expr,
+                    offset = offset
+                ));
+            } else {
+                code.push_str(&format!(
+                    "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_at(self.buf, self.start + {offset}usize, &encoded);\n        self\n    }}\n",
+                    name = field.name.to_snake_case(),
+                    param = param_ty,
+                    expr = encoded_expr,
+                    offset = offset
+                ));
+            }
         }
     }
     for nested in &g_nested {
@@ -1684,5 +1758,27 @@ fn count_value_expr(count_name: &str, ty: &str) -> String {
             format!("({}.try_into().unwrap()) as {}", count_name, base)
         }
         _ => format!("{}.try_into().unwrap()", count_name),
+    }
+}
+
+fn host_type_for_field(field: &Field, schema: &Schema) -> Option<String> {
+    let prim = field_primitive(field, schema)?;
+    optional_host_type(&prim).map(|s| s.to_string())
+}
+
+fn raw_expr_for_value(
+    field: &Field,
+    val_ident: &str,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) -> Option<String> {
+    if let Some(TypeDef::Enum { encoding, .. } | TypeDef::Set { encoding, .. }) =
+        schema.types.get(&field.ty)
+    {
+        let inner_rust =
+            primitive_to_rust_endian(encoding, &opts.endian, field.byte_order.as_deref())?;
+        scalar_expr(&format!("{}.0", val_ident), &inner_rust)
+    } else {
+        Some(val_ident.to_string())
     }
 }

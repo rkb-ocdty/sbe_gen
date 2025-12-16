@@ -61,6 +61,12 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
             let (comment, tail) = msg.parse_comment(after_bids).expect("comment");
             assert_eq!(comment.as_str().unwrap(), "ok");
             assert!(tail.is_empty());
+
+            let bad = std::panic::catch_unwind(|| {
+                let mut b = OrderBookBuilder::new();
+                b.seq(1_000_000_000); // above maxValue
+            });
+            assert!(bad.is_err(), "value constraints should panic on violation");
         }
     "#;
     fs::write(src_dir.join("main.rs"), main_rs).expect("write main");
@@ -88,8 +94,8 @@ fn builders_round_trip_through_decoder() {
                 <type name="varStringEncoding" primitiveType="uint8"/>
             </types>
             <message name="OrderBook" id="42" blockLength="8" semanticType="d">
-                <field name="seq" id="1" type="uint32" offset="0"/>
-                <field name="source" id="2" type="uint32" offset="4"/>
+                <field name="seq" id="1" type="uint32" offset="0" minValue="0" maxValue="1000000"/>
+                <field name="source" id="2" type="uint32" offset="4" minValue="0" maxValue="1000000"/>
                 <group name="Bids" id="3" blockLength="12" dimensionType="groupSize">
                     <field name="price" id="1" type="int64"/>
                     <field name="qty" id="2" type="int32"/>
