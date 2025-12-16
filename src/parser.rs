@@ -14,6 +14,7 @@ use thiserror::Error;
 #[derive(Debug, Clone)]
 pub struct Schema {
     /// The optional package name declared on the root element.
+    #[allow(dead_code)]
     pub package: Option<String>,
     /// A mapping of user defined types (enums, sets, composites).
     pub types: HashMap<String, TypeDef>,
@@ -25,20 +26,45 @@ pub struct Schema {
 #[derive(Debug, Clone)]
 pub enum TypeDef {
     /// A simple alias around a primitive type (e.g. `<type name="Foo" primitiveType="uint8"/>`).
-    Primitive { name: String, primitive: String, length: Option<usize>, presence: Option<String>, constant: Option<String> },
+    Primitive {
+        name: String,
+        primitive: String,
+        length: Option<usize>,
+        presence: Option<String>,
+        constant: Option<String>,
+    },
     /// An enumeration with a specific underlying type and a set of valid values.
-    Enum { name: String, encoding: String, values: Vec<(String, String)> },
+    Enum {
+        name: String,
+        encoding: String,
+        values: Vec<(String, String)>,
+    },
     /// A bit set where each choice corresponds to a bit index.
-    Set { name: String, encoding: String, choices: Vec<(String, String)> },
+    Set {
+        name: String,
+        encoding: String,
+        choices: Vec<(String, String)>,
+    },
     /// A composite type made up of nested `type` and `ref` elements.
-    Composite { name: String, fields: Vec<CompositeField> },
+    Composite {
+        name: String,
+        fields: Vec<CompositeField>,
+    },
 }
 
 /// A field inside a composite definition.
 #[derive(Debug, Clone)]
 pub enum CompositeField {
     /// A primitive type with an optional constant value.
-    Type { name: String, primitive: String, length: Option<usize>, presence: Option<String>, constant: Option<String> },
+    Type {
+        name: String,
+        primitive: String,
+        length: Option<usize>,
+        #[allow(dead_code)]
+        presence: Option<String>,
+        #[allow(dead_code)]
+        constant: Option<String>,
+    },
     /// A reference to a previously defined type.
     Ref { name: String, ty: String },
 }
@@ -49,8 +75,10 @@ pub struct Message {
     /// The message name.
     pub name: String,
     /// The numeric identifier of the message.
+    #[allow(dead_code)]
     pub id: u32,
     /// The optional block length attribute.
+    #[allow(dead_code)]
     pub block_length: Option<u32>,
     /// All fields defined in the message, in order.
     pub fields: Vec<Field>,
@@ -63,6 +91,7 @@ pub struct Field {
     /// The field name.
     pub name: String,
     /// The field id attribute.
+    #[allow(dead_code)]
     pub id: Option<u32>,
     /// The name of the type used by this field (primitive or user defined).
     pub ty: String,
@@ -121,28 +150,51 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                         "type" => {
                             // <type name="foo" primitiveType="uint8" ...>
                             let name = attr_req(&ty_node, "name", "type")?;
-                            let primitive = attr_req(&ty_node, "primitiveType", &format!("type {}", name))?;
-                            let length = ty_node.attribute("length").and_then(|s| s.parse::<usize>().ok());
+                            let primitive =
+                                attr_req(&ty_node, "primitiveType", &format!("type {}", name))?;
+                            let length = ty_node
+                                .attribute("length")
+                                .and_then(|s| s.parse::<usize>().ok());
                             let presence = ty_node.attribute("presence").map(|s| s.to_string());
                             let constant = ty_node.text().map(|s| s.trim().to_string());
-                            types.insert(name.clone(), TypeDef::Primitive { name, primitive: primitive.to_string(), length, presence, constant });
+                            types.insert(
+                                name.clone(),
+                                TypeDef::Primitive {
+                                    name,
+                                    primitive: primitive.to_string(),
+                                    length,
+                                    presence,
+                                    constant,
+                                },
+                            );
                         }
                         "enum" => {
                             let name = attr_req(&ty_node, "name", "enum")?;
-                            let encoding = attr_req(&ty_node, "encodingType", &format!("enum {}", name))?;
+                            let encoding =
+                                attr_req(&ty_node, "encodingType", &format!("enum {}", name))?;
                             let mut values = Vec::new();
                             for val_node in ty_node.children() {
-                                if val_node.is_element() && val_node.tag_name().name() == "validValue" {
+                                if val_node.is_element()
+                                    && val_node.tag_name().name() == "validValue"
+                                {
                                     let vname = attr_req(&val_node, "name", "validValue")?;
                                     let val = val_node.text().unwrap_or("").trim().to_string();
                                     values.push((vname.to_string(), val));
                                 }
                             }
-                            types.insert(name.clone(), TypeDef::Enum { name, encoding: encoding.to_string(), values });
+                            types.insert(
+                                name.clone(),
+                                TypeDef::Enum {
+                                    name,
+                                    encoding: encoding.to_string(),
+                                    values,
+                                },
+                            );
                         }
                         "set" => {
                             let name = attr_req(&ty_node, "name", "set")?;
-                            let encoding = attr_req(&ty_node, "encodingType", &format!("set {}", name))?;
+                            let encoding =
+                                attr_req(&ty_node, "encodingType", &format!("set {}", name))?;
                             let mut choices = Vec::new();
                             for ch_node in ty_node.children() {
                                 if ch_node.is_element() && ch_node.tag_name().name() == "choice" {
@@ -151,26 +203,55 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                     choices.push((cname.to_string(), bit));
                                 }
                             }
-                            types.insert(name.clone(), TypeDef::Set { name, encoding: encoding.to_string(), choices });
+                            types.insert(
+                                name.clone(),
+                                TypeDef::Set {
+                                    name,
+                                    encoding: encoding.to_string(),
+                                    choices,
+                                },
+                            );
                         }
                         "composite" => {
                             let name = attr_req(&ty_node, "name", "composite")?;
                             let mut fields = Vec::new();
                             for f_node in ty_node.children() {
-                                if !f_node.is_element() { continue; }
+                                if !f_node.is_element() {
+                                    continue;
+                                }
                                 match f_node.tag_name().name() {
                                     "type" => {
-                                        let fname = attr_req(&f_node, "name", &format!("composite field in {}", name))?;
+                                        let fname = attr_req(
+                                            &f_node,
+                                            "name",
+                                            &format!("composite field in {}", name),
+                                        )?;
                                         let primitive = attr_req(&f_node, "primitiveType", &fname)?;
-                                        let length = f_node.attribute("length").and_then(|s| s.parse::<usize>().ok());
-                                        let presence = f_node.attribute("presence").map(|s| s.to_string());
+                                        let length = f_node
+                                            .attribute("length")
+                                            .and_then(|s| s.parse::<usize>().ok());
+                                        let presence =
+                                            f_node.attribute("presence").map(|s| s.to_string());
                                         let constant = f_node.text().map(|s| s.trim().to_string());
-                                        fields.push(CompositeField::Type { name: fname, primitive: primitive.to_string(), length, presence, constant });
+                                        fields.push(CompositeField::Type {
+                                            name: fname,
+                                            primitive: primitive.to_string(),
+                                            length,
+                                            presence,
+                                            constant,
+                                        });
                                     }
                                     "ref" => {
-                                        let fname = attr_req(&f_node, "name", &format!("composite ref in {}", name))?;
+                                        let fname = attr_req(
+                                            &f_node,
+                                            "name",
+                                            &format!("composite ref in {}", name),
+                                        )?;
                                         let ty = attr_req(&f_node, "type", &fname)?;
-                                        fields.push(CompositeField::Ref { name: fname, ty: ty.to_string() });
+                                        fields.push(CompositeField::Ref {
+                                            name: fname,
+                                            ty: ty.to_string(),
+                                        });
                                     }
                                     _ => {}
                                 }
@@ -195,15 +276,24 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                 let block_length = attr_opt_u32(&child, "blockLength", &mname)?;
                 let mut fields = Vec::new();
                 for f in child.children() {
-                    if !f.is_element() { continue; }
+                    if !f.is_element() {
+                        continue;
+                    }
                     match f.tag_name().name() {
                         "field" => {
-                            let fname = attr_req(&f, "name", &format!("field in message {}", mname))?;
+                            let fname =
+                                attr_req(&f, "name", &format!("field in message {}", mname))?;
                             let fid = attr_opt_u32(&f, "id", &fname)?;
                             let ftype = attr_req(&f, "type", &fname)?;
                             let presence = f.attribute("presence").map(|s| s.to_string());
                             let value_ref = f.attribute("valueRef").map(|s| s.to_string());
-                            fields.push(Field { name: fname, id: fid, ty: ftype.to_string(), presence, value_ref });
+                            fields.push(Field {
+                                name: fname,
+                                id: fid,
+                                ty: ftype.to_string(),
+                                presence,
+                                value_ref,
+                            });
                         }
                         "group" => {
                             // groups are variable length sections; skip them
@@ -214,28 +304,42 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                         _ => {}
                     }
                 }
-                messages.push(Message { name: mname, id: mid.unwrap_or(0), block_length, fields });
+                messages.push(Message {
+                    name: mname,
+                    id: mid.unwrap_or(0),
+                    block_length,
+                    fields,
+                });
             }
         }
     }
     if messages.is_empty() {
         return Err(ParseError::MissingSections);
     }
-    Ok(Schema { package, types, messages })
+    Ok(Schema {
+        package,
+        types,
+        messages,
+    })
 }
 
-fn attr_req<'a>(node: &'a roxmltree::Node, attr: &str, elem_desc: &str) -> Result<String, ParseError> {
+fn attr_req(node: &roxmltree::Node, attr: &str, elem_desc: &str) -> Result<String, ParseError> {
     match node.attribute(attr) {
         Some(v) => Ok(v.to_string()),
         None => Err(ParseError::MissingAttribute(attr.into(), elem_desc.into())),
     }
 }
 
-fn attr_opt_u32(node: &roxmltree::Node, attr: &str, elem_desc: &str) -> Result<Option<u32>, ParseError> {
+fn attr_opt_u32(
+    node: &roxmltree::Node,
+    attr: &str,
+    elem_desc: &str,
+) -> Result<Option<u32>, ParseError> {
     match node.attribute(attr) {
-        Some(v) => {
-            v.parse::<u32>().map(Some).map_err(|_| ParseError::InvalidInt(attr.into(), elem_desc.into()))
-        }
+        Some(v) => v
+            .parse::<u32>()
+            .map(Some)
+            .map_err(|_| ParseError::InvalidInt(attr.into(), elem_desc.into())),
         None => Ok(None),
     }
 }

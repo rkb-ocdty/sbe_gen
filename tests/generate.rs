@@ -1,0 +1,39 @@
+use std::collections::HashMap;
+
+use sbe_gen::{generate, GeneratorOptions};
+
+#[test]
+fn generates_basic_schema() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <enum name="Side" encodingType="char">
+                    <validValue name="Buy">B</validValue>
+                    <validValue name="Sell">S</validValue>
+                </enum>
+            </types>
+            <message name="Order" id="1" blockLength="12">
+                <field name="id" id="1" type="uint64" />
+                <field name="side" id="2" type="Side" />
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+
+    let mod_rs = module_map.get("mod.rs").expect("mod.rs emitted");
+    assert!(mod_rs.contains("pub mod order;\n"));
+    assert!(mod_rs.contains("pub use order::Order;"));
+
+    let types_rs = module_map.get("types.rs").expect("types.rs emitted");
+    assert!(types_rs.contains("pub struct Side"));
+    assert!(types_rs.contains("pub const Buy: Self"));
+    assert!(types_rs.contains("pub const Sell: Self"));
+
+    let order_rs = module_map.get("order.rs").expect("order.rs emitted");
+    assert!(order_rs.contains("pub struct Order"));
+    assert!(order_rs.contains("pub id: U64"));
+    assert!(order_rs.contains("pub side: Side"));
+    assert!(order_rs.contains("zc_parse_prefix!();"));
+}

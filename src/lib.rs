@@ -15,8 +15,8 @@
 //! include a `parse_prefix` helper so that a message can be viewed at
 //! the front of a byte buffer without copying.
 
-mod parser;
 mod codegen;
+mod parser;
 
 use std::path::Path;
 use thiserror::Error;
@@ -31,7 +31,9 @@ pub struct GeneratorOptions {
 
 impl Default for GeneratorOptions {
     fn default() -> Self {
-        Self { endian: "little".into() }
+        Self {
+            endian: "little".into(),
+        }
     }
 }
 
@@ -49,7 +51,10 @@ pub enum GeneratorError {
 /// The returned vector contains `(filename, contents)` tuples for each
 /// generated module.  The common macro and imports are included in
 /// every file to make them standalone.
-pub fn generate(schema_xml: &str, opts: &GeneratorOptions) -> Result<Vec<(String, String)>, GeneratorError> {
+pub fn generate(
+    schema_xml: &str,
+    opts: &GeneratorOptions,
+) -> Result<Vec<(String, String)>, GeneratorError> {
     let schema = parser::parse_schema(schema_xml)?;
     Ok(codegen::generate(&schema, opts))
 }
@@ -57,7 +62,11 @@ pub fn generate(schema_xml: &str, opts: &GeneratorOptions) -> Result<Vec<(String
 /// Read an XML schema and write the generated modules into a target
 /// directory.  This convenience function creates the directory if it
 /// does not exist and writes one `.rs` file per message.
-pub fn generate_to<P: AsRef<Path>>(schema_xml: &str, out_dir: P, opts: &GeneratorOptions) -> Result<(), GeneratorError> {
+pub fn generate_to<P: AsRef<Path>>(
+    schema_xml: &str,
+    out_dir: P,
+    opts: &GeneratorOptions,
+) -> Result<(), GeneratorError> {
     use std::fs;
     use std::fs::File;
     use std::io::Write;

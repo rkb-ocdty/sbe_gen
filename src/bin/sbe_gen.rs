@@ -20,7 +20,9 @@ struct Args {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let xml = fs::read_to_string(&args.input)?;
-    let opts = sbe_gen::GeneratorOptions { endian: args.endian.clone() };
+    let opts = sbe_gen::GeneratorOptions {
+        endian: args.endian.clone(),
+    };
     sbe_gen::generate_to(&xml, &args.output, &opts)?;
     Ok(())
 }
