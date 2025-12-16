@@ -1,0 +1,16 @@
+[package]
+name = "sbe_gen"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <you@example.com>"]
+description = "Simple Binary Encoding (SBE) code generator for Rust using zerocopy"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+
+[dependencies]
+quick-xml = "0.29"
+roxmltree = "0.19"
+thiserror = "1.0"
+heck = "0.4"
+clap = { version = "4.1", features = ["derive"] }
+zerocopy = { version = "0.8.31", features = ["derive"] }
