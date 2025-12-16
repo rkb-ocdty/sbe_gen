@@ -105,7 +105,7 @@ pub struct Group {
     pub block_length: Option<u32>,
     /// Name of the composite type that encodes the group dimensions.
     pub dimension_type: String,
-    /// Members inside the group (fields and data) in order.
+    /// Members inside the group (fields, nested groups and data) in order.
     pub members: Vec<GroupMember>,
 }
 
@@ -113,6 +113,7 @@ pub struct Group {
 #[derive(Debug, Clone)]
 pub enum GroupMember {
     Field(Field),
+    Group(Group),
     Data(VarDataField),
 }
 
@@ -424,6 +425,10 @@ fn parse_group(node: &roxmltree::Node, parent_name: &str) -> Result<Group, Parse
                     presence,
                     value_ref,
                 }));
+            }
+            "group" => {
+                let nested = parse_group(&child, &name)?;
+                members.push(GroupMember::Group(nested));
             }
             "data" => {
                 let dname = attr_req(

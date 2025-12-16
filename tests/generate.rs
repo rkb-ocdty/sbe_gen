@@ -96,3 +96,37 @@ fn optional_fields_expose_option_helpers() {
     assert!(opt_rs.contains("pub maybe_price: I64"));
     assert!(opt_rs.contains("pub fn maybe_price_opt"));
 }
+
+#[test]
+fn generates_nested_groups() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <composite name="groupSize">
+                    <type name="blockLength" primitiveType="uint16"/>
+                    <type name="numInGroup" primitiveType="uint16"/>
+                </composite>
+            </types>
+            <message name="Outer" id="1" blockLength="4">
+                <field name="seq" id="1" type="uint32" />
+                <group name="Parents" id="2" blockLength="8" dimensionType="groupSize">
+                    <field name="id" id="1" type="uint64" />
+                    <group name="Children" id="3" blockLength="4" dimensionType="groupSize">
+                        <field name="child_id" id="1" type="uint32" />
+                    </group>
+                </group>
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let outer_rs = module_map.get("outer.rs").expect("outer.rs emitted");
+    assert!(outer_rs.contains("parse_parents"));
+    assert!(outer_rs.contains("ParentsGroup"));
+    assert!(outer_rs.contains("parse_children"));
+    assert!(outer_rs.contains("ChildrenGroup"));
+    assert!(outer_rs.contains("skip_children"));
+    assert!(outer_rs.contains("ParentsEntryView"));
+    assert!(outer_rs.contains("pub children: ChildrenGroup"));
+}

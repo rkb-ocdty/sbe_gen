@@ -77,6 +77,31 @@ fn group_data(g: &Group) -> Vec<&VarDataField> {
         .collect()
 }
 
+fn group_groups(g: &Group) -> Vec<&Group> {
+    g.members
+        .iter()
+        .filter_map(|m| {
+            if let GroupMember::Group(gr) = m {
+                Some(gr)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn group_has_var_data(g: &Group) -> bool {
+    if !group_data(g).is_empty() {
+        return true;
+    }
+    for sub in group_groups(g) {
+        if group_has_var_data(sub) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Generate a collection of `(filename, contents)` tuples for the
 /// supplied schema.
 pub fn generate(schema: &Schema, opts: &GeneratorOptions) -> Vec<(String, String)> {
@@ -284,7 +309,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     let fields = message_fields(msg);
     let groups = message_groups(msg);
     let data_fields = message_data(msg);
-    let has_group_data = groups.iter().any(|g| !group_data(g).is_empty());
+    let has_group_data = groups.iter().any(|g| group_has_var_data(g));
     let has_var_data = has_group_data || !data_fields.is_empty();
     let needs_mem = has_group_data || !groups.is_empty();
     let mut code = String::new();
@@ -399,178 +424,9 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         }
     }
     code.push_str("}\n\n");
-    // group helpers
+    // group helpers (supports nesting)
     for g in groups {
-        let group_name = &g.name;
-        let group_snake = g.name.to_snake_case();
-        let entry_struct = format!("{}Entry", group_name);
-        let entry_view = format!("{}EntryView", group_name);
-        let group_struct = format!("{}Group", group_name);
-        let iter_name = format!("{}Iter", group_name);
-        let g_fields = group_fields(g);
-        let g_data = group_data(g);
-        let dim = dimension_fields(schema, &g.dimension_type, opts);
-        let block_len_expr = if let Some(bl) = g.block_length {
-            bl.to_string()
-        } else {
-            format!("mem::size_of::<{}>()", entry_struct)
-        };
-
-        code.push_str(&format!(
-            "pub fn parse_{}<'a>(buf: &'a [u8]) -> Option<{}<'a>> {{\n",
-            group_snake, group_struct
-        ));
-        code.push_str(&format!(
-            "    let (header, payload) = Ref::<_, {}>::from_prefix(buf).ok()?;\n",
-            g.dimension_type
-        ));
-        code.push_str("    let header = Ref::into_ref(header);\n");
-        code.push_str(&format!(
-            "    let header_block_len = {};\n",
-            to_usize_expr(&format!("header.{}", dim.block_field), &dim.block_field_ty)
-        ));
-        code.push_str(&format!(
-            "    let declared = {} as usize;\n",
-            block_len_expr
-        ));
-        code.push_str(
-            "    let block_length = if header_block_len == 0 { declared } else { header_block_len };\n",
-        );
-        code.push_str(&format!(
-            "    Some({} {{ header, payload, block_length }})\n",
-            group_struct
-        ));
-        code.push_str("}\n\n");
-
-        code.push_str(&format!(
-            "pub struct {}<'a> {{\n    pub header: &'a {},\n    payload: &'a [u8],\n    block_length: usize,\n}}\n\n",
-            group_struct, g.dimension_type
-        ));
-        code.push_str(&format!("impl<'a> {}<'a> {{\n", group_struct));
-        code.push_str(&format!(
-            "    pub fn count(&self) -> usize {{ {} }}\n",
-            to_usize_expr(
-                &format!("self.header.{}", dim.count_field),
-                &dim.count_field_ty
-            )
-        ));
-        code.push_str(&format!("    pub fn iter(&self) -> {}<'a> {{\n", iter_name));
-        if has_var_data {
-            code.push_str(&format!(
-                "        static DATA_KINDS: [LengthKind; {}] = [{}];\n",
-                g_data.len(),
-                g_data
-                    .iter()
-                    .map(|d| length_kind_token(length_kind_for_data(&d.ty, schema, opts)))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-            code.push_str(&format!(
-                "        {} {{ remaining: self.payload, entries_left: self.count(), block_length: self.block_length, data_kinds: &DATA_KINDS }}\n",
-                iter_name
-            ));
-        } else {
-            code.push_str(&format!(
-                "        {} {{ remaining: self.payload, entries_left: self.count(), block_length: self.block_length }}\n",
-                iter_name
-            ));
-        }
-        code.push_str("    }\n}\n\n");
-
-        if has_var_data {
-            code.push_str(&format!(
-                "pub struct {}<'a> {{\n    remaining: &'a [u8],\n    entries_left: usize,\n    block_length: usize,\n    data_kinds: &'static [LengthKind],\n}}\n\n",
-                iter_name
-            ));
-        } else {
-            code.push_str(&format!(
-                "pub struct {}<'a> {{\n    remaining: &'a [u8],\n    entries_left: usize,\n    block_length: usize,\n}}\n\n",
-                iter_name
-            ));
-        }
-        code.push_str(&format!(
-            "impl<'a> {}<'a> {{\n    pub fn remainder(&self) -> &'a [u8] {{ self.remaining }}\n}}\n\n",
-            iter_name
-        ));
-
-        code.push_str(&format!(
-            "#[derive(Debug, Clone, Copy)]\npub struct {}<'a> {{\n    pub body: &'a {},\n",
-            entry_view, entry_struct
-        ));
-        for d in &g_data {
-            code.push_str(&format!(
-                "    pub {}: VarData<'a>,\n",
-                d.name.to_snake_case()
-            ));
-        }
-        code.push_str("}\n\n");
-
-        code.push_str("#[repr(C)]\n");
-        code.push_str(
-            "#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]\n",
-        );
-        code.push_str(&format!("pub struct {} {{\n", entry_struct));
-        for field in &g_fields {
-            if field.presence.as_deref() == Some("constant") {
-                continue;
-            }
-            let ty_name = &field.ty;
-            let field_name = field.name.to_snake_case();
-            if let Some(rust_type) = resolve_type(ty_name, schema, opts) {
-                code.push_str(&format!("    pub {}: {},\n", field_name, rust_type));
-            }
-        }
-        code.push_str("}\n\n");
-        if !g_fields.is_empty() {
-            code.push_str(&format!("impl {} {{\n", entry_struct));
-            optional_methods_for_fields(&mut code, &g_fields, schema, opts, "self");
-            code.push_str("}\n\n");
-        }
-
-        if has_var_data {
-            code.push_str(&format!(
-                "impl<'a> Iterator for {}<'a> {{\n    type Item = {}<'a>;\n    fn next(&mut self) -> Option<Self::Item> {{\n        if self.entries_left == 0 {{\n            return None;\n        }}\n        let (body, rest) = Ref::<_, {}>::from_prefix(self.remaining).ok()?;\n        let mut tail = rest;\n",
-                iter_name, entry_view, entry_struct
-            ));
-            for (idx, d) in g_data.iter().enumerate() {
-                code.push_str(&format!(
-                    "        let ({}_{}, after_{}) = parse_var_data(tail, *self.data_kinds.get({})?)?;\n        tail = after_{};\n",
-                    d.name.to_snake_case(),
-                    idx,
-                    idx,
-                    idx,
-                    idx
-                ));
-            }
-            code.push_str(
-                "        self.remaining = tail;\n        self.entries_left -= 1;\n        Some(",
-            );
-            code.push_str(&format!("{} {{ body: Ref::into_ref(body)", entry_view));
-            for (idx, d) in g_data.iter().enumerate() {
-                code.push_str(&format!(
-                    ", {}: {}_{}",
-                    d.name.to_snake_case(),
-                    d.name.to_snake_case(),
-                    idx
-                ));
-            }
-            code.push_str(" })\n    }\n}\n\n");
-        } else {
-            code.push_str(&format!("impl<'a> Iterator for {}<'a> {{\n", iter_name));
-            code.push_str(&format!("    type Item = {}<'a>;\n", entry_view));
-            code.push_str(
-                "    fn next(&mut self) -> Option<Self::Item> {\n        if self.entries_left == 0 {\n            return None;\n        }\n",
-            );
-            code.push_str(&format!(
-                "        let (body, tail) = Ref::<_, {}>::from_prefix(self.remaining).ok()?;\n",
-                entry_struct
-            ));
-            code.push_str(
-                "        self.remaining = tail;\n        self.entries_left -= 1;\n        Some(",
-            );
-            code.push_str(&format!("{} {{ body: Ref::into_ref(body) }}", entry_view));
-            code.push_str(")\n    }\n}\n\n");
-        }
+        emit_group(g, schema, opts, &mut code);
     }
     code
 }
@@ -707,6 +563,257 @@ fn length_kind_token(kind: LengthKind) -> &'static str {
         LengthKind::U16 => "LengthKind::U16",
         LengthKind::U32 => "LengthKind::U32",
         LengthKind::U64 => "LengthKind::U64",
+    }
+}
+
+fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut String) {
+    let group_name = &g.name;
+    let group_snake = g.name.to_snake_case();
+    let entry_struct = format!("{}Entry", group_name);
+    let entry_view = format!("{}EntryView", group_name);
+    let group_struct = format!("{}Group", group_name);
+    let iter_name = format!("{}Iter", group_name);
+    let g_fields = group_fields(g);
+    let g_data = group_data(g);
+    let g_nested = group_groups(g);
+    let has_data = !g_data.is_empty();
+    let has_nested = !g_nested.is_empty();
+    let has_any_var = has_data || has_nested;
+    let dim = dimension_fields(schema, &g.dimension_type, opts);
+    let block_len_expr = if let Some(bl) = g.block_length {
+        bl.to_string()
+    } else {
+        format!("mem::size_of::<{}>()", entry_struct)
+    };
+
+    code.push_str(&format!(
+        "pub fn parse_{}<'a>(buf: &'a [u8]) -> Option<{}<'a>> {{\n",
+        group_snake, group_struct
+    ));
+    code.push_str(&format!(
+        "    let (header, payload) = Ref::<_, {}>::from_prefix(buf).ok()?;\n",
+        g.dimension_type
+    ));
+    code.push_str("    let header = Ref::into_ref(header);\n");
+    code.push_str(&format!(
+        "    let header_block_len = {};\n",
+        to_usize_expr(&format!("header.{}", dim.block_field), &dim.block_field_ty)
+    ));
+    code.push_str(&format!(
+        "    let declared = {} as usize;\n",
+        block_len_expr
+    ));
+    code.push_str(
+        "    let block_length = if header_block_len == 0 { declared } else { header_block_len };\n",
+    );
+    code.push_str(&format!(
+        "    Some({} {{ header, payload, block_length }})\n",
+        group_struct
+    ));
+    code.push_str("}\n\n");
+
+    code.push_str(&format!(
+        "pub struct {}<'a> {{\n    pub header: &'a {},\n    payload: &'a [u8],\n    block_length: usize,\n}}\n\n",
+        group_struct, g.dimension_type
+    ));
+    code.push_str(&format!("impl<'a> {}<'a> {{\n", group_struct));
+    code.push_str(&format!(
+        "    pub fn count(&self) -> usize {{ {} }}\n",
+        to_usize_expr(
+            &format!("self.header.{}", dim.count_field),
+            &dim.count_field_ty
+        )
+    ));
+    code.push_str(&format!("    pub fn iter(&self) -> {}<'a> {{\n", iter_name));
+    if has_data {
+        code.push_str(&format!(
+            "        static DATA_KINDS: [LengthKind; {}] = [{}];\n",
+            g_data.len(),
+            g_data
+                .iter()
+                .map(|d| length_kind_token(length_kind_for_data(&d.ty, schema, opts)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        code.push_str(&format!(
+            "        {} {{ remaining: self.payload, entries_left: self.count(), block_length: self.block_length, data_kinds: &DATA_KINDS }}\n",
+            iter_name
+        ));
+    } else {
+        code.push_str(&format!(
+            "        {} {{ remaining: self.payload, entries_left: self.count(), block_length: self.block_length }}\n",
+            iter_name
+        ));
+    }
+    code.push_str("    }\n}\n\n");
+
+    if has_data {
+        code.push_str(&format!(
+            "pub struct {}<'a> {{\n    remaining: &'a [u8],\n    entries_left: usize,\n    block_length: usize,\n    data_kinds: &'static [LengthKind],\n}}\n\n",
+            iter_name
+        ));
+    } else {
+        code.push_str(&format!(
+            "pub struct {}<'a> {{\n    remaining: &'a [u8],\n    entries_left: usize,\n    block_length: usize,\n}}\n\n",
+            iter_name
+        ));
+    }
+    code.push_str(&format!(
+        "impl<'a> {}<'a> {{\n    pub fn remainder(&self) -> &'a [u8] {{ self.remaining }}\n}}\n\n",
+        iter_name
+    ));
+
+    code.push_str(&format!(
+        "#[derive(Debug, Clone, Copy)]\npub struct {}<'a> {{\n    pub body: &'a {},\n",
+        entry_view, entry_struct
+    ));
+    for nested in &g_nested {
+        code.push_str(&format!(
+            "    pub {}: {}Group<'a>,\n",
+            nested.name.to_snake_case(),
+            nested.name
+        ));
+    }
+    for d in &g_data {
+        code.push_str(&format!(
+            "    pub {}: VarData<'a>,\n",
+            d.name.to_snake_case()
+        ));
+    }
+    code.push_str("}\n\n");
+
+    code.push_str("#[repr(C)]\n");
+    code.push_str(
+        "#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]\n",
+    );
+    code.push_str(&format!("pub struct {} {{\n", entry_struct));
+    for field in &g_fields {
+        if field.presence.as_deref() == Some("constant") {
+            continue;
+        }
+        let ty_name = &field.ty;
+        let field_name = field.name.to_snake_case();
+        if let Some(rust_type) = resolve_type(ty_name, schema, opts) {
+            code.push_str(&format!("    pub {}: {},\n", field_name, rust_type));
+        }
+    }
+    code.push_str("}\n\n");
+    if !g_fields.is_empty() {
+        code.push_str(&format!("impl {} {{\n", entry_struct));
+        optional_methods_for_fields(code, &g_fields, schema, opts, "self");
+        code.push_str("}\n\n");
+    }
+
+    if has_any_var {
+        code.push_str(&format!(
+            "impl<'a> Iterator for {}<'a> {{\n    type Item = {}<'a>;\n    fn next(&mut self) -> Option<Self::Item> {{\n        if self.entries_left == 0 {{\n            return None;\n        }}\n        let (body, rest) = Ref::<_, {}>::from_prefix(self.remaining).ok()?;\n        let mut tail = rest;\n",
+            iter_name, entry_view, entry_struct
+        ));
+        let mut data_idx = 0;
+        for member in &g.members {
+            match member {
+                GroupMember::Group(nested) => {
+                    code.push_str(&format!(
+                        "        let nested_{name} = parse_{snake}(tail)?;\n",
+                        name = nested.name.to_snake_case(),
+                        snake = nested.name.to_snake_case()
+                    ));
+                    code.push_str(&format!(
+                        "        let after_{name} = skip_{snake}(nested_{name}.payload, nested_{name}.count(), nested_{name}.block_length)?;\n        tail = after_{name};\n",
+                        name = nested.name.to_snake_case(),
+                        snake = nested.name.to_snake_case()
+                    ));
+                }
+                GroupMember::Data(_) => {
+                    code.push_str(&format!(
+                        "        let (data_{idx}, after_{idx}) = parse_var_data(tail, *self.data_kinds.get({idx})?)?;\n        tail = after_{idx};\n",
+                        idx = data_idx
+                    ));
+                    data_idx += 1;
+                }
+                GroupMember::Field(_) => {}
+            }
+        }
+        code.push_str(
+            "        self.remaining = tail;\n        self.entries_left -= 1;\n        Some(",
+        );
+        code.push_str(&format!("{} {{ body: Ref::into_ref(body)", entry_view));
+        data_idx = 0;
+        for member in &g.members {
+            match member {
+                GroupMember::Group(nested) => {
+                    code.push_str(&format!(
+                        ", {}: nested_{}",
+                        nested.name.to_snake_case(),
+                        nested.name.to_snake_case()
+                    ));
+                }
+                GroupMember::Data(d) => {
+                    code.push_str(&format!(", {}: data_{}", d.name.to_snake_case(), data_idx));
+                    data_idx += 1;
+                }
+                GroupMember::Field(_) => {}
+            }
+        }
+        code.push_str(" })\n    }\n}\n\n");
+    } else {
+        code.push_str(&format!("impl<'a> Iterator for {}<'a> {{\n", iter_name));
+        code.push_str(&format!("    type Item = {}<'a>;\n", entry_view));
+        code.push_str(
+            "    fn next(&mut self) -> Option<Self::Item> {\n        if self.entries_left == 0 {\n            return None;\n        }\n",
+        );
+        code.push_str(&format!(
+            "        let (body, tail) = Ref::<_, {}>::from_prefix(self.remaining).ok()?;\n",
+            entry_struct
+        ));
+        code.push_str(
+            "        self.remaining = tail;\n        self.entries_left -= 1;\n        Some(",
+        );
+        code.push_str(&format!("{} {{ body: Ref::into_ref(body) }}", entry_view));
+        code.push_str(")\n    }\n}\n\n");
+    }
+
+    let has_var_members = g
+        .members
+        .iter()
+        .any(|m| !matches!(m, GroupMember::Field(_)));
+    code.push_str(&format!(
+        "fn skip_{}<'a>(mut cursor: &'a [u8], count: usize, block_length: usize) -> Option<&'a [u8]> {{\n    for _ in 0..count {{\n",
+        group_snake
+    ));
+    if !has_var_members {
+        code.push_str("        if block_length == 0 { return None; }\n");
+    }
+    code.push_str(
+        "        let mut tail = if block_length <= cursor.len() { &cursor[block_length..] } else { return None; };\n",
+    );
+    for member in g
+        .members
+        .iter()
+        .filter(|m| !matches!(m, GroupMember::Field(_)))
+    {
+        match member {
+            GroupMember::Group(nested) => {
+                code.push_str(&format!(
+                    "        let nested = parse_{}(tail)?;\n        tail = skip_{}(nested.payload, nested.count(), nested.block_length)?;\n",
+                    nested.name.to_snake_case(),
+                    nested.name.to_snake_case()
+                ));
+            }
+            GroupMember::Data(d) => {
+                let kind = length_kind_token(length_kind_for_data(&d.ty, schema, opts));
+                code.push_str(&format!(
+                    "        let (_, after_data) = parse_var_data(tail, {})?;\n        tail = after_data;\n",
+                    kind
+                ));
+            }
+            GroupMember::Field(_) => {}
+        }
+    }
+    code.push_str("        cursor = tail;\n    }\n    Some(cursor)\n}\n\n");
+
+    for nested in &g_nested {
+        emit_group(nested, schema, opts, code);
     }
 }
 

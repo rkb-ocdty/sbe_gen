@@ -30,6 +30,9 @@ code generation for other languages.
 * **Optional fields:** `presence="optional"` fields stay zero‑copy but
   gain `<field>_opt()` accessors that return `Option` based on the SBE
   null value for that primitive.
+* **Nested groups:** Groups inside groups are supported; iterators
+  expose nested group views so you can walk the hierarchy without
+  copying.
 * **Schema reflection:** Support for SBE primitives, enums, sets,
   composites, groups and variable‑length data.
 
