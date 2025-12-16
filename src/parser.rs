@@ -80,8 +80,40 @@ pub struct Message {
     /// The optional block length attribute.
     #[allow(dead_code)]
     pub block_length: Option<u32>,
-    /// All fields defined in the message, in order.
-    pub fields: Vec<Field>,
+    /// All message members (fields, groups, variable data) in order.
+    pub members: Vec<MessageMember>,
+}
+
+/// A member of a message body.
+#[derive(Debug, Clone)]
+pub enum MessageMember {
+    Field(Field),
+    Group(Group),
+    Data(VarDataField),
+}
+
+/// A repeating group with its own fixed fields and optional variable data.
+#[derive(Debug, Clone)]
+pub struct Group {
+    /// Group name.
+    pub name: String,
+    /// Optional numeric identifier.
+    #[allow(dead_code)]
+    pub id: Option<u32>,
+    /// The optional block length attribute for each entry.
+    #[allow(dead_code)]
+    pub block_length: Option<u32>,
+    /// Name of the composite type that encodes the group dimensions.
+    pub dimension_type: String,
+    /// Members inside the group (fields and data) in order.
+    pub members: Vec<GroupMember>,
+}
+
+/// Members allowed within a group.
+#[derive(Debug, Clone)]
+pub enum GroupMember {
+    Field(Field),
+    Data(VarDataField),
 }
 
 /// A field on a message.  Only fields that map to fixed‑length types
@@ -99,6 +131,18 @@ pub struct Field {
     pub presence: Option<String>,
     /// The valueRef attribute if present (constants).
     pub value_ref: Option<String>,
+}
+
+/// A variable length data field.
+#[derive(Debug, Clone)]
+pub struct VarDataField {
+    /// The field name.
+    pub name: String,
+    /// The optional field id.
+    #[allow(dead_code)]
+    pub id: Option<u32>,
+    /// The encoding type used for the length prefix.
+    pub ty: String,
 }
 
 /// Errors that can occur while parsing a schema.
@@ -274,7 +318,7 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                 let mname = attr_req(&child, "name", "message")?;
                 let mid = attr_opt_u32(&child, "id", &mname)?;
                 let block_length = attr_opt_u32(&child, "blockLength", &mname)?;
-                let mut fields = Vec::new();
+                let mut members = Vec::new();
                 for f in child.children() {
                     if !f.is_element() {
                         continue;
@@ -287,19 +331,27 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                             let ftype = attr_req(&f, "type", &fname)?;
                             let presence = f.attribute("presence").map(|s| s.to_string());
                             let value_ref = f.attribute("valueRef").map(|s| s.to_string());
-                            fields.push(Field {
+                            members.push(MessageMember::Field(Field {
                                 name: fname,
                                 id: fid,
                                 ty: ftype.to_string(),
                                 presence,
                                 value_ref,
-                            });
+                            }));
                         }
                         "group" => {
-                            // groups are variable length sections; skip them
+                            let group = parse_group(&f, &mname)?;
+                            members.push(MessageMember::Group(group));
                         }
                         "data" => {
-                            // variable length data; skip
+                            let name = attr_req(&f, "name", &format!("data in message {}", mname))?;
+                            let id = attr_opt_u32(&f, "id", &name)?;
+                            let ty = attr_req(&f, "type", &name)?;
+                            members.push(MessageMember::Data(VarDataField {
+                                name,
+                                id,
+                                ty: ty.to_string(),
+                            }));
                         }
                         _ => {}
                     }
@@ -308,7 +360,7 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                     name: mname,
                     id: mid.unwrap_or(0),
                     block_length,
-                    fields,
+                    members,
                 });
             }
         }
@@ -342,4 +394,59 @@ fn attr_opt_u32(
             .map_err(|_| ParseError::InvalidInt(attr.into(), elem_desc.into())),
         None => Ok(None),
     }
+}
+
+fn parse_group(node: &roxmltree::Node, parent_name: &str) -> Result<Group, ParseError> {
+    let name = attr_req(node, "name", &format!("group in {}", parent_name))?;
+    let id = attr_opt_u32(node, "id", &name)?;
+    let block_length = attr_opt_u32(node, "blockLength", &name)?;
+    let dimension_type = attr_req(node, "dimensionType", &name)?;
+    let mut members = Vec::new();
+    for child in node.children() {
+        if !child.is_element() {
+            continue;
+        }
+        match child.tag_name().name() {
+            "field" => {
+                let fname = attr_req(
+                    &child,
+                    "name",
+                    &format!("field in group {} of {}", name, parent_name),
+                )?;
+                let fid = attr_opt_u32(&child, "id", &fname)?;
+                let ftype = attr_req(&child, "type", &fname)?;
+                let presence = child.attribute("presence").map(|s| s.to_string());
+                let value_ref = child.attribute("valueRef").map(|s| s.to_string());
+                members.push(GroupMember::Field(Field {
+                    name: fname,
+                    id: fid,
+                    ty: ftype.to_string(),
+                    presence,
+                    value_ref,
+                }));
+            }
+            "data" => {
+                let dname = attr_req(
+                    &child,
+                    "name",
+                    &format!("data in group {} of {}", name, parent_name),
+                )?;
+                let did = attr_opt_u32(&child, "id", &dname)?;
+                let ty = attr_req(&child, "type", &dname)?;
+                members.push(GroupMember::Data(VarDataField {
+                    name: dname,
+                    id: did,
+                    ty: ty.to_string(),
+                }));
+            }
+            _ => {}
+        }
+    }
+    Ok(Group {
+        name,
+        id,
+        block_length,
+        dimension_type,
+        members,
+    })
 }

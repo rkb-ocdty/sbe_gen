@@ -24,9 +24,11 @@ code generation for other languages.
   `parse_prefix` helper via a `zc_parse_prefix!` macro which
   leverages `zerocopy::Ref` to split a slice into a typed prefix and a
   remainder.
-* **Schema reflection:** Basic support for SBE primitives, enums,
-  sets and composites.  Nested groups and variable‑length data are
-  ignored by the generator at the moment.
+* **Groups and variable data included:** Nested repeating groups are
+  emitted with iterable views and entry structs, and `data` fields
+  become `VarData` slices with an ergonomic `as_str()` helper.
+* **Schema reflection:** Support for SBE primitives, enums, sets,
+  composites, groups and variable‑length data.
 
 ## Usage
 
@@ -95,16 +97,50 @@ impl CmePacketHdr {
 }
 ```
 
+### Groups and variable data
+
+Groups are emitted as iterators layered on top of the raw buffer, and
+variable‑length `data` fields come back as lightweight `VarData<'a>`
+wrappers you can inspect as bytes or as UTF‑8 strings.
+
+```xml
+<message name="Book" id="1" blockLength="4">
+  <field name="seq" id="1" type="uint32" />
+  <group name="Levels" id="2" blockLength="16" dimensionType="groupSize">
+    <field name="price" id="1" type="int64" />
+    <field name="qty" id="2" type="int64" />
+    <data name="note" id="3" type="varStringEncoding" />
+  </group>
+  <data name="raw" id="4" type="varStringEncoding" />
+</message>
+```
+
+The generated module exposes clear, chainable helpers:
+
+```rust
+use sbe::book::*;
+
+let (book, rest) = Book::parse_prefix(bytes).expect("prefix");
+
+// Parse the Levels group
+let levels = parse_levels(rest).expect("levels header");
+for level in levels.iter() {
+    let price = level.body.price;
+    let qty = level.body.qty;
+    let note = level.note.as_str();
+}
+let after_levels = levels.iter().remainder();
+
+// Parse trailing variable data
+let (raw, tail) = book.parse_raw(after_levels).expect("raw data");
+let raw_str = raw.as_str();
+```
+
 ## Status and limitations
 
 This project is a work‑in‑progress.  It covers the core SBE types
-(primitives, enums, sets and composites) but deliberately ignores
-several advanced features:
-
-* **Groups and variable‑length data** are not emitted by the
-  generator.  These sections of a message appear as gaps in the
-  emitted struct; you can still access the remainder of the buffer
-  using the `parse_prefix` helper.
+(primitives, enums, sets, composites, groups and variable data) but
+still omits some advanced features:
 * **Constant fields** are not materialised as struct members.  They
   are represented by `const` definitions on the generated type.
 * **Extra metadata** such as field IDs and descriptions are not
