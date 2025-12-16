@@ -558,7 +558,9 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     code.push_str(
         "    pub fn with_capacity(capacity: usize) -> Self {\n        let mut buf = vec![0u8; Self::BLOCK_LENGTH as usize];\n        buf.reserve(capacity);\n        Self { buf }\n    }\n",
     );
-    for (field, offset) in &field_layouts {
+    for layout in &field_layouts {
+        let field = layout.field;
+        let offset = layout.offset;
         let field_name = field.name.to_snake_case();
         if let Some(resolved_type) =
             resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
@@ -601,6 +603,66 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     for g in groups {
         emit_group(g, schema, opts, &mut code);
     }
+    // acting version aware view
+    code.push_str(&format!(
+        "#[derive(Debug, Clone)]\npub enum {}Body<'a> {{\n    Borrowed(&'a {}, &'a [u8]),\n    Owned(Vec<u8>),\n}}\n\n",
+        msg.name, msg.name
+    ));
+    code.push_str(&format!(
+        "impl<'a> core::ops::Deref for {}Body<'a> {{\n    type Target = {};\n    fn deref(&self) -> &Self::Target {{\n        match self {{\n            Self::Borrowed(m, _) => m,\n            Self::Owned(bytes) => {{\n                let (msg, _) = Ref::<_, {}>::from_prefix(bytes.as_slice()).expect(\"padded message\");\n                Ref::into_ref(msg)\n            }}\n        }}\n    }}\n}}\n\n",
+        msg.name, msg.name, msg.name
+    ));
+    code.push_str(&format!(
+        "impl<'a> {}Body<'a> {{\n    fn bytes(&self) -> &[u8] {{\n        match self {{\n            Self::Borrowed(_, raw) => raw,\n            Self::Owned(bytes) => bytes.as_slice(),\n        }}\n    }}\n}}\n\n",
+        msg.name
+    ));
+    code.push_str(&format!(
+        "#[derive(Debug, Clone)]\npub struct {}View<'a> {{\n    pub body: {}Body<'a>,\n    pub acting_block_length: usize,\n    pub acting_version: u16,\n}}\n\n",
+        msg.name, msg.name
+    ));
+    code.push_str(&format!(
+        "impl<'a> {}View<'a> {{\n",
+        msg.name
+    ));
+    for layout in &field_layouts {
+        let field = layout.field;
+        let fname = field.name.to_snake_case();
+        let since = field.since_version.unwrap_or(0);
+        code.push_str(&format!(
+            "    pub fn has_{fname}(&self) -> bool {{\n        if self.acting_version < {since} as u16 {{ return false; }}\n        {offset} + {size} <= self.acting_block_length\n    }}\n",
+            fname = fname,
+            since = since,
+            offset = layout.offset,
+            size = layout.size
+        ));
+        if let Some(resolved) =
+            resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+        {
+            code.push_str(&format!(
+                "    pub fn {fname}(&self) -> Option<&{ty}> {{\n        if !self.has_{fname}() {{ return None; }}\n        let bytes = &self.body.bytes()[{offset}..{offset_plus}];\n        let (r, _) = Ref::<_, {ty}>::from_prefix(bytes).ok()?;\n        Some(Ref::into_ref(r))\n    }}\n",
+                fname = fname,
+                ty = resolved,
+                offset = layout.offset,
+                offset_plus = layout.offset + layout.size
+            ));
+        }
+    }
+    if !data_fields.is_empty() {
+        for d in &data_fields {
+            let fn_name = d.name.to_snake_case();
+            let kind = length_kind_token(length_kind_for_data(&d.ty, schema, opts));
+            code.push_str(&format!(
+                "    pub fn parse_{name}<'b>(&self, buf: &'b [u8]) -> Option<(VarData<'b>, &'b [u8])> {{\n        parse_var_data(buf, {kind})\n    }}\n",
+                name = fn_name,
+                kind = kind
+            ));
+        }
+    }
+    code.push_str("}\n\n");
+    code.push_str(&format!(
+        "pub fn parse_with_header<'a>(body: &'a [u8], header: &MessageHeader) -> Option<({name}View<'a>, &'a [u8])> {{\n    let mut acting_block_length = header.block_length.get() as usize;\n    if acting_block_length == 0 {{ acting_block_length = {name}::BLOCK_LENGTH as usize; }}\n    let acting_version = header.version.get();\n    if body.len() < acting_block_length {{ return None; }}\n    let needed = core::mem::size_of::<{name}>();\n    let (prefix, rest) = body.split_at(acting_block_length);\n    if acting_block_length >= needed {{\n        let (msg, _) = Ref::<_, {name}>::from_prefix(&prefix[..needed]).ok()?;\n        let view = {name}View {{ body: {name}Body::Borrowed(Ref::into_ref(msg), &prefix[..needed]), acting_block_length, acting_version }};\n        Some((view, rest))\n    }} else {{\n        let mut owned = vec![0u8; needed];\n        owned[..acting_block_length].copy_from_slice(prefix);\n        let view = {name}View {{ body: {name}Body::Owned(owned), acting_block_length, acting_version }};\n        Some((view, rest))\n    }}\n}}\n",
+        name = msg.name
+    ));
     code
 }
 
@@ -1104,7 +1166,9 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     ));
     code.push_str("}\n\n");
     code.push_str(&format!("impl<'a> {}<'a> {{\n", entry_builder));
-    for (field, offset) in &entry_layout {
+    for layout in &entry_layout {
+        let field = layout.field;
+        let offset = layout.offset;
         if let Some(resolved_type) =
             resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
         {
@@ -1499,11 +1563,17 @@ fn group_block_length(g: &Group, schema: &Schema, opts: &GeneratorOptions) -> us
         .unwrap_or(0)
 }
 
+struct FieldLayout<'a> {
+    field: &'a Field,
+    offset: usize,
+    size: usize,
+}
+
 fn layout_fields<'a>(
     fields: &[&'a Field],
     schema: &Schema,
     opts: &GeneratorOptions,
-) -> Vec<(&'a Field, usize)> {
+) -> Vec<FieldLayout<'a>> {
     let mut cur = 0usize;
     let mut layout = Vec::new();
     for f in fields {
@@ -1515,7 +1585,11 @@ fn layout_fields<'a>(
         }
         if let Some(sz) = field_size_bytes(f, schema, opts) {
             let start = f.offset.map(|o| o as usize).unwrap_or(cur);
-            layout.push((*f, start));
+            layout.push(FieldLayout {
+                field: *f,
+                offset: start,
+                size: sz,
+            });
             cur = start + sz;
         }
     }

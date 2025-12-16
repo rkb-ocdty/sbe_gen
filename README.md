@@ -27,6 +27,9 @@ code generation for other languages.
 * **Field offsets and padding:** Explicit `offset` attributes are
   honoured, with padding inserted to keep layout in sync with the SBE
   block length.
+* **Acting-version aware decoding:** Helpers accept the standard SBE
+  message header, apply the advertised block length/version at runtime,
+  and expose presence checks so older payloads still parse safely.
 * **Declarative parsing helpers:** Each generated message implements a
   `parse_prefix` helper via a `zc_parse_prefix!` macro which
   leverages `zerocopy::Ref` to split a slice into a typed prefix and a
