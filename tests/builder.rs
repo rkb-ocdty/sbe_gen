@@ -16,6 +16,8 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
     }
     // simple binary exercising the builders
     let main_rs = r#"
+        #![allow(dead_code, non_camel_case_types, unused_imports, unused_variables, unused_mut)]
+
         mod types;
         mod message_header;
         mod order_book;
