@@ -16,6 +16,10 @@ pub struct Schema {
     /// The optional package name declared on the root element.
     #[allow(dead_code)]
     pub package: Option<String>,
+    /// Optional schema id from the root messageSchema element.
+    pub schema_id: Option<u32>,
+    /// Version declared on the schema.
+    pub version: Option<u32>,
     /// A mapping of user defined types (enums, sets, composites).
     pub types: HashMap<String, TypeDef>,
     /// All messages declared in the schema.
@@ -215,6 +219,8 @@ pub fn parse_schema(xml: &str) -> Result<Schema, ParseError> {
 fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
     // package attribute is optional
     let package = node.attribute("package").map(|s| s.to_string());
+    let schema_id = attr_opt_u32(&node, "schemaId", "messageSchema")?;
+    let version = attr_opt_u32(&node, "version", "messageSchema")?;
     // build type map
     let mut types = HashMap::new();
     for child in node.children() {
@@ -423,6 +429,8 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
     }
     Ok(Schema {
         package,
+        schema_id,
+        version,
         types,
         messages,
     })

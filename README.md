@@ -16,10 +16,17 @@ code generation for other languages.
 * **Zero‑copy decoding:** Generated message structs derive
   `FromBytes`, `IntoBytes`, `KnownLayout`, `Immutable` and `Unaligned` so
   they can be safely cast from network buffers without copying.
+* **Spec‑aware encoding builders:** Each message gets a `FooBuilder`
+  companion that writes the fixed block, groups and variable data with
+  the correct offsets, byte order and length prefixes. Builders can also
+  emit the standard SBE message header.
 * **Byte‑order aware fields:** Multi‑byte integer and floating‑point
   fields use the `zerocopy::byteorder` types (e.g.
   `little_endian::U32`, `little_endian::F64`) so that endianness is
   explicit and efficient.
+* **Field offsets and padding:** Explicit `offset` attributes are
+  honoured, with padding inserted to keep layout in sync with the SBE
+  block length.
 * **Declarative parsing helpers:** Each generated message implements a
   `parse_prefix` helper via a `zc_parse_prefix!` macro which
   leverages `zerocopy::Ref` to split a slice into a typed prefix and a
@@ -30,11 +37,9 @@ code generation for other languages.
 * **Optional fields:** `presence="optional"` fields stay zero‑copy but
   gain `<field>_opt()` accessors that return `Option` based on the SBE
   null value for that primitive.
-* **Nested groups:** Groups inside groups are supported; iterators
-  expose nested group views so you can walk the hierarchy without
-  copying.
-* **Schema reflection:** Support for SBE primitives, enums, sets,
-  composites, groups and variable‑length data.
+* **Schema reflection:** Generated code surfaces `SINCE_VERSION`,
+  `SEMANTIC_TYPE`, field offsets and constraint constants so you can
+  reason about compatibility at the call site.
 
 ## Usage
 
@@ -142,15 +147,47 @@ let (raw, tail) = book.parse_raw(after_levels).expect("raw data");
 let raw_str = raw.as_str();
 ```
 
+### Encoding with builders
+
+Every message module includes a builder that writes the fixed block,
+groups and variable data with the correct padding, offsets and length
+prefixes. Builders accept native Rust numeric types and take care of the
+endianness for you.
+
+```rust
+use sbe::book::*;
+
+let mut builder = BookBuilder::new();
+builder.seq(123);
+builder.levels(|levels| {
+    levels.entry(|entry| {
+        entry.price(101_500);
+        entry.qty(10);
+        entry.note(b"resting");
+    });
+});
+builder.raw(b"payload");
+
+// Emit the message framed with the standard SBE header
+let framed = builder.finish_with_header();
+// or if you only need the body:
+// let body = builder.finish();
+```
+
 ## Status and limitations
 
-This project is a work‑in‑progress.  It covers the core SBE types
-(primitives, enums, sets, composites, groups and variable data) but
-still omits some advanced features:
-* **Constant fields** are not materialised as struct members.  They
-  are represented by `const` definitions on the generated type.
-* **Extra metadata** such as field IDs and descriptions are not
-  surfaced at runtime.
+This project is a work‑in‑progress.  The generator covers the core SBE
+types (primitives, enums, sets, composites, groups and variable data)
+along with the standard message header and byte‑order rules.  Notable
+spec features that are still missing:
+* **Optional composites** are treated as required; optional handling is
+  only emitted for primitives, enums and sets.
+* **Acting version awareness** is not implemented; parsing assumes the
+  current schema version and declared block lengths.
+* **Value constraints** (min/max/null/initial) are emitted as constants
+  but are not enforced at runtime.
+* **Constant fields** remain `const` definitions rather than struct
+  members.
 
 Contributions to extend the generator are welcome.  See the
 `src/parser.rs` and `src/codegen.rs` modules for the implementation.
