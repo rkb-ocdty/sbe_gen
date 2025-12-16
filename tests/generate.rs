@@ -133,3 +133,26 @@ fn generates_nested_groups() {
     assert!(outer_rs.contains("pub children: ChildrenGroup"));
     assert!(outer_rs.contains("SINCE_VERSION"));
 }
+
+#[test]
+fn byte_order_and_offsets() {
+    let xml = r#"
+        <messageSchema package="test">
+            <message name="Endian" id="1" blockLength="8">
+                <field name="a" id="1" type="uint16" offset="0" />
+                <field name="b" id="2" type="uint16" offset="2" byteOrder="big" />
+                <field name="c" id="3" type="uint32" offset="4" />
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let endian_rs = module_map.get("endian.rs").expect("endian.rs emitted");
+    assert!(endian_rs.contains("pub a: U16"));
+    assert!(endian_rs.contains("pub b: zerocopy::byteorder::big_endian::U16"));
+    assert!(endian_rs.contains("pub c: U32"));
+    assert!(endian_rs.contains("A_OFFSET: u32 = 0"));
+    assert!(endian_rs.contains("B_OFFSET: u32 = 2"));
+    assert!(endian_rs.contains("C_OFFSET: u32 = 4"));
+}

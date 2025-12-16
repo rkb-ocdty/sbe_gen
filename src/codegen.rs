@@ -387,7 +387,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         // skip if type not known or unsupported
         let ty_name = &field.ty;
         let field_name = field.name.to_snake_case();
-        if let Some(rust_type) = resolve_type(ty_name, schema, opts) {
+        if let Some(rust_type) = resolve_type(ty_name, schema, opts, field.byte_order.as_deref()) {
             code.push_str(&format!("    pub {}: {},\n", field_name, rust_type));
         }
     }
@@ -445,7 +445,10 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     // message metadata
     let msg_since = msg.since_version.unwrap_or(0);
     let msg_sem = msg.semantic_type.clone().unwrap_or_default();
-    code.push_str(&format!("    pub const SINCE_VERSION: u32 = {};\n", msg_since));
+    code.push_str(&format!(
+        "    pub const SINCE_VERSION: u32 = {};\n",
+        msg_since
+    ));
     code.push_str(&format!(
         "    pub const SEMANTIC_TYPE: &'static str = \"{}\";\n",
         msg_sem
@@ -454,6 +457,13 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     for f in &fields {
         let sv = f.since_version.unwrap_or(0);
         let sem = f.semantic_type.clone().unwrap_or_default();
+        if let Some(off) = f.offset {
+            code.push_str(&format!(
+                "    pub const {}_OFFSET: u32 = {};\n",
+                f.name.to_uppercase(),
+                off
+            ));
+        }
         code.push_str(&format!(
             "    pub const {}_SINCE_VERSION: u32 = {};\n",
             f.name.to_uppercase(),
@@ -504,6 +514,35 @@ fn primitive_to_rust(prim: &str, _opts: &GeneratorOptions) -> Option<String> {
     }
 }
 
+fn primitive_to_rust_endian(
+    prim: &str,
+    schema_endian: &str,
+    override_endian: Option<&str>,
+) -> Option<String> {
+    let endian = override_endian.unwrap_or(schema_endian);
+    let short = override_endian.is_none() || override_endian == Some(schema_endian);
+    let ty = match prim {
+        "boolean" | "uint8" => "u8",
+        "int8" => "i8",
+        "char" => "u8",
+        "uint16" => "U16",
+        "int16" => "I16",
+        "uint32" => "U32",
+        "int32" => "I32",
+        "uint64" => "U64",
+        "int64" => "I64",
+        "float" => "F32",
+        "double" => "F64",
+        "varStringEncoding" | "varAsciiEncoding" | "varDataEncoding" => return None,
+        _ => return None,
+    };
+    if short {
+        Some(ty.into())
+    } else {
+        Some(format!("zerocopy::byteorder::{}_endian::{}", endian, ty))
+    }
+}
+
 /// Provide a default constant value for a primitive type.
 fn primitive_default_value(prim: &str) -> &'static str {
     match prim {
@@ -521,9 +560,14 @@ fn primitive_default_value(prim: &str) -> &'static str {
 /// consults the type map for user defined types or falls back to
 /// primitive mapping.  Unsupported types return `None`, causing the
 /// field to be skipped.
-fn resolve_type(name: &str, schema: &Schema, opts: &GeneratorOptions) -> Option<String> {
+fn resolve_type(
+    name: &str,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+    override_endian: Option<&str>,
+) -> Option<String> {
     // first check if it's a primitive built‑in
-    if let Some(rust) = primitive_to_rust(name, opts) {
+    if let Some(rust) = primitive_to_rust_endian(name, &opts.endian, override_endian) {
         return Some(rust);
     }
     // check user defined types
@@ -534,7 +578,8 @@ fn resolve_type(name: &str, schema: &Schema, opts: &GeneratorOptions) -> Option<
                 length,
                 ..
             } => {
-                let rust = primitive_to_rust(&td_primitive(td), opts)?;
+                let rust =
+                    primitive_to_rust_endian(&td_primitive(td), &opts.endian, override_endian)?;
                 if let Some(len) = length {
                     Some(format!("[{}; {}]", rust, len))
                 } else {
@@ -669,15 +714,16 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         group_struct, g.dimension_type
     ));
     code.push_str(&format!("impl<'a> {}<'a> {{\n", group_struct));
-    if let Some(sv) = g.since_version {
-        code.push_str(&format!("    pub const SINCE_VERSION: u32 = {};\n", sv));
-    }
-    if let Some(ref sem) = g.semantic_type {
-        code.push_str(&format!(
-            "    pub const SEMANTIC_TYPE: &'static str = \"{}\";\n",
-            sem
-        ));
-    }
+    let g_since = g.since_version.unwrap_or(0);
+    let g_sem = g.semantic_type.clone().unwrap_or_default();
+    code.push_str(&format!(
+        "    pub const SINCE_VERSION: u32 = {};\n",
+        g_since
+    ));
+    code.push_str(&format!(
+        "    pub const SEMANTIC_TYPE: &'static str = \"{}\";\n",
+        g_sem
+    ));
     code.push_str(&format!(
         "    pub fn count(&self) -> usize {{ {} }}\n",
         to_usize_expr(
@@ -754,7 +800,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         }
         let ty_name = &field.ty;
         let field_name = field.name.to_snake_case();
-        if let Some(rust_type) = resolve_type(ty_name, schema, opts) {
+        if let Some(rust_type) = resolve_type(ty_name, schema, opts, field.byte_order.as_deref()) {
             code.push_str(&format!("    pub {}: {},\n", field_name, rust_type));
         }
     }
@@ -1001,7 +1047,8 @@ fn optional_host_type(prim: &str) -> Option<&'static str> {
 }
 
 fn scalar_expr(expr: &str, rust_type: &str) -> Option<String> {
-    match rust_type {
+    let base = rust_type.rsplit("::").next().unwrap_or(rust_type);
+    match base {
         "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64" | "f32" | "f64" => {
             Some(expr.to_string())
         }
@@ -1026,7 +1073,8 @@ fn optional_methods_for_fields(
         let field_name = field.name.to_snake_case();
         let method_name = format!("{}_opt", field_name);
 
-        let resolved_type = match resolve_type(&field.ty, schema, opts) {
+        let resolved_type = match resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+        {
             Some(t) => t,
             None => continue,
         };

@@ -136,6 +136,10 @@ pub struct Field {
     pub id: Option<u32>,
     /// The name of the type used by this field (primitive or user defined).
     pub ty: String,
+    /// Optional fixed offset for the field within the block.
+    pub offset: Option<u32>,
+    /// Per-field byte order override.
+    pub byte_order: Option<String>,
     /// The presence attribute if specified.
     pub presence: Option<String>,
     /// The sinceVersion attribute if specified.
@@ -350,6 +354,8 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                 attr_req(&f, "name", &format!("field in message {}", mname))?;
                             let fid = attr_opt_u32(&f, "id", &fname)?;
                             let ftype = attr_req(&f, "type", &fname)?;
+                            let offset = attr_opt_u32(&f, "offset", &fname)?;
+                            let byte_order = f.attribute("byteOrder").map(|s| s.to_string());
                             let presence = f.attribute("presence").map(|s| s.to_string());
                             let since_version = attr_opt_u32(&f, "sinceVersion", &fname)?;
                             let semantic_type = f.attribute("semanticType").map(|s| s.to_string());
@@ -358,6 +364,8 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                 name: fname,
                                 id: fid,
                                 ty: ftype.to_string(),
+                                offset,
+                                byte_order,
                                 presence,
                                 since_version,
                                 semantic_type,
@@ -446,12 +454,16 @@ fn parse_group(node: &roxmltree::Node, parent_name: &str) -> Result<Group, Parse
                 )?;
                 let fid = attr_opt_u32(&child, "id", &fname)?;
                 let ftype = attr_req(&child, "type", &fname)?;
+                let offset = attr_opt_u32(&child, "offset", &fname)?;
+                let byte_order = child.attribute("byteOrder").map(|s| s.to_string());
                 let presence = child.attribute("presence").map(|s| s.to_string());
                 let value_ref = child.attribute("valueRef").map(|s| s.to_string());
                 members.push(GroupMember::Field(Field {
                     name: fname.clone(),
                     id: fid,
                     ty: ftype.to_string(),
+                    offset,
+                    byte_order,
                     presence,
                     since_version: attr_opt_u32(&child, "sinceVersion", &fname)?,
                     semantic_type: child.attribute("semanticType").map(|s| s.to_string()),
