@@ -1243,6 +1243,10 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     code.push_str(
         "#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]\n",
     );
+    if let Some(desc) = &g.description {
+        let doc = format!("Group: {}", desc);
+        push_doc_comment(code, &doc);
+    }
     code.push_str(&format!("pub struct {} {{\n", entry_struct));
     write_fields_with_offsets(code, &g_fields, schema, opts);
     code.push_str("}\n\n");

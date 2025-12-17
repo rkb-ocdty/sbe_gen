@@ -125,6 +125,8 @@ pub struct Group {
     pub since_version: Option<u32>,
     /// semanticType of the group if provided.
     pub semantic_type: Option<String>,
+    /// Optional description attribute.
+    pub description: Option<String>,
 }
 
 /// Members allowed within a group.
@@ -498,6 +500,7 @@ fn parse_group(node: &roxmltree::Node, parent_name: &str) -> Result<Group, Parse
     let dimension_type = attr_req(node, "dimensionType", &name)?;
     let since_version = attr_opt_u32(node, "sinceVersion", &name)?;
     let semantic_type = node.attribute("semanticType").map(|s| s.to_string());
+    let description = node.attribute("description").map(|s| s.to_string());
     let mut members = Vec::new();
     for child in node.children() {
         if !child.is_element() {
@@ -564,5 +567,6 @@ fn parse_group(node: &roxmltree::Node, parent_name: &str) -> Result<Group, Parse
         members,
         since_version,
         semantic_type,
+        description,
     })
 }
