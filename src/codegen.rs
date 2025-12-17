@@ -12,6 +12,20 @@ use crate::parser::{
 use crate::GeneratorOptions;
 use heck::ToSnakeCase;
 
+fn push_doc_comment(buf: &mut String, text: &str) {
+    for line in text.lines() {
+        buf.push_str("/// ");
+        buf.push_str(line.trim_end());
+        buf.push('\n');
+    }
+}
+
+fn maybe_doc_comment(buf: &mut String, desc: &Option<String>) {
+    if let Some(text) = desc.as_deref() {
+        push_doc_comment(buf, text);
+    }
+}
+
 fn message_fields(msg: &Message) -> Vec<&Field> {
     msg.members
         .iter()
@@ -179,12 +193,14 @@ fn generate_types(
                 length,
                 presence,
                 constant,
+                description,
             } => {
                 let rust_type = primitive_to_rust(primitive, opts);
                 if rust_type.is_none() {
                     continue;
                 }
                 let rust_type = rust_type.unwrap();
+                maybe_doc_comment(&mut code, description);
                 if let Some(len) = length {
                     code.push_str(&format!("pub type {} = [{}; {}];\n", name, rust_type, len));
                 } else if presence.as_deref() == Some("constant") {
@@ -211,6 +227,7 @@ fn generate_types(
                 name,
                 encoding,
                 values,
+                description,
             } => {
                 let primitive = encoding_primitive(encoding, types);
                 let rust_type = primitive
@@ -223,6 +240,7 @@ fn generate_types(
                     .and_then(optional_host_type)
                     .unwrap_or("u8");
                 let prim_is_char = primitive.as_deref() == Some("char");
+                maybe_doc_comment(&mut code, description);
                 code.push_str("#[repr(transparent)]\n");
                 code.push_str(
                     "#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy, PartialEq, Eq)]\n",
@@ -230,10 +248,11 @@ fn generate_types(
                 code.push_str(&format!("pub struct {}(pub {});\n", name, rust_type));
                 if !values.is_empty() {
                     let enum_name = format!("{}Enum", name);
+                    maybe_doc_comment(&mut code, description);
                     code.push_str(&format!("#[repr({})]\n", repr_ty));
                     code.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
                     code.push_str(&format!("pub enum {} {{\n", enum_name));
-                    for (vname, val) in values {
+                    for (vname, val, vdesc) in values {
                         let literal = if prim_is_char {
                             if val.len() == 1 {
                                 let c = val.chars().next().unwrap();
@@ -244,6 +263,7 @@ fn generate_types(
                         } else {
                             val.clone()
                         };
+                        maybe_doc_comment(&mut code, vdesc);
                         code.push_str(&format!("    {} = {},\n", vname, literal));
                     }
                     code.push_str("}\n");
@@ -251,7 +271,7 @@ fn generate_types(
                 // define associated constants for variants
                 if !values.is_empty() {
                     code.push_str(&format!("impl {} {{\n", name));
-                    for (vname, val) in values {
+                    for (vname, val, vdesc) in values {
                         // convert char values to numeric if necessary
                         let literal = if prim_is_char {
                             if val.len() == 1 {
@@ -263,6 +283,7 @@ fn generate_types(
                         } else {
                             val.clone()
                         };
+                        maybe_doc_comment(&mut code, vdesc);
                         code.push_str(&format!(
                             "    pub const {}: Self = Self({});\n",
                             vname,
@@ -276,7 +297,7 @@ fn generate_types(
                             enum_name = enum_name,
                             raw_expr = raw_expr
                         ));
-                        for (vname, val) in values {
+                        for (vname, val, _) in values {
                             let literal = if prim_is_char {
                                 if val.len() == 1 {
                                     let c = val.chars().next().unwrap();
@@ -314,8 +335,10 @@ fn generate_types(
                 name,
                 encoding,
                 choices,
+                description,
             } => {
                 let rust_type = primitive_to_rust(encoding, opts).unwrap_or_else(|| "u8".into());
+                maybe_doc_comment(&mut code, description);
                 code.push_str("#[repr(transparent)]\n");
                 code.push_str(
                     "#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy, PartialEq, Eq)]\n",
@@ -323,9 +346,10 @@ fn generate_types(
                 code.push_str(&format!("pub struct {}(pub {});\n", name, rust_type));
                 if !choices.is_empty() {
                     code.push_str(&format!("impl {} {{\n", name));
-                    for (cname, bit) in choices {
+                    for (cname, bit, cdesc) in choices {
                         // bit may be decimal or integer string
                         let bit_idx: u32 = bit.parse().unwrap_or(0);
+                        maybe_doc_comment(&mut code, cdesc);
                         code.push_str(&format!(
                             "    pub const {}: Self = Self(<{}>::new(1 << {}));\n",
                             cname, rust_type, bit_idx
@@ -335,7 +359,13 @@ fn generate_types(
                 }
                 code.push('\n');
             }
-            TypeDef::Composite { name, fields } => {
+            TypeDef::Composite {
+                name,
+                fields,
+                description,
+            } => {
+                // attach doc comment if present on composite
+                maybe_doc_comment(&mut code, description);
                 // generate a struct representing the composite
                 code.push_str("#[repr(C)]\n");
                 code.push_str(
@@ -350,9 +380,11 @@ fn generate_types(
                             length,
                             presence: _,
                             constant: _,
+                            description,
                         } => {
                             if let Some(rust_type) = primitive_to_rust(primitive, opts) {
                                 if let Some(len) = length {
+                                    maybe_doc_comment(&mut code, description);
                                     code.push_str(&format!(
                                         "    pub {}: [{}; {}],\n",
                                         fname.to_snake_case(),
@@ -360,6 +392,7 @@ fn generate_types(
                                         len
                                     ));
                                 } else {
+                                    maybe_doc_comment(&mut code, description);
                                     code.push_str(&format!(
                                         "    pub {}: {},\n",
                                         fname.to_snake_case(),
@@ -999,6 +1032,7 @@ fn write_fields_with_offsets(
                     cur_offset = Some(target);
                 }
             }
+            maybe_doc_comment(code, &field.description);
             code.push_str(&format!("    pub {}: {},\n", field_name, rust_type));
             if let Some(sz) = field_sz {
                 if let Some(cur) = cur_offset {

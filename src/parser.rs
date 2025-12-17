@@ -36,23 +36,27 @@ pub enum TypeDef {
         length: Option<usize>,
         presence: Option<String>,
         constant: Option<String>,
+        description: Option<String>,
     },
     /// An enumeration with a specific underlying type and a set of valid values.
     Enum {
         name: String,
         encoding: String,
-        values: Vec<(String, String)>,
+        values: Vec<(String, String, Option<String>)>,
+        description: Option<String>,
     },
     /// A bit set where each choice corresponds to a bit index.
     Set {
         name: String,
         encoding: String,
-        choices: Vec<(String, String)>,
+        choices: Vec<(String, String, Option<String>)>,
+        description: Option<String>,
     },
     /// A composite type made up of nested `type` and `ref` elements.
     Composite {
         name: String,
         fields: Vec<CompositeField>,
+        description: Option<String>,
     },
 }
 
@@ -68,6 +72,8 @@ pub enum CompositeField {
         presence: Option<String>,
         #[allow(dead_code)]
         constant: Option<String>,
+        #[allow(dead_code)]
+        description: Option<String>,
     },
     /// A reference to a previously defined type.
     Ref { name: String, ty: String },
@@ -160,6 +166,8 @@ pub struct Field {
     pub semantic_type: Option<String>,
     /// The valueRef attribute if present (constants).
     pub value_ref: Option<String>,
+    /// Description attribute if present.
+    pub description: Option<String>,
 }
 
 /// A variable length data field.
@@ -246,6 +254,9 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                     length,
                                     presence,
                                     constant,
+                                    description: ty_node
+                                        .attribute("description")
+                                        .map(|s| s.to_string()),
                                 },
                             );
                         }
@@ -253,6 +264,8 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                             let name = attr_req(&ty_node, "name", "enum")?;
                             let encoding =
                                 attr_req(&ty_node, "encodingType", &format!("enum {}", name))?;
+                            let description =
+                                ty_node.attribute("description").map(|s| s.to_string());
                             let mut values = Vec::new();
                             for val_node in ty_node.children() {
                                 if val_node.is_element()
@@ -260,7 +273,9 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                 {
                                     let vname = attr_req(&val_node, "name", "validValue")?;
                                     let val = val_node.text().unwrap_or("").trim().to_string();
-                                    values.push((vname.to_string(), val));
+                                    let desc =
+                                        val_node.attribute("description").map(|s| s.to_string());
+                                    values.push((vname.to_string(), val, desc));
                                 }
                             }
                             types.insert(
@@ -269,6 +284,7 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                     name,
                                     encoding: encoding.to_string(),
                                     values,
+                                    description,
                                 },
                             );
                         }
@@ -276,12 +292,16 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                             let name = attr_req(&ty_node, "name", "set")?;
                             let encoding =
                                 attr_req(&ty_node, "encodingType", &format!("set {}", name))?;
+                            let description =
+                                ty_node.attribute("description").map(|s| s.to_string());
                             let mut choices = Vec::new();
                             for ch_node in ty_node.children() {
                                 if ch_node.is_element() && ch_node.tag_name().name() == "choice" {
                                     let cname = attr_req(&ch_node, "name", "choice")?;
                                     let bit = ch_node.text().unwrap_or("").trim().to_string();
-                                    choices.push((cname.to_string(), bit));
+                                    let desc =
+                                        ch_node.attribute("description").map(|s| s.to_string());
+                                    choices.push((cname.to_string(), bit, desc));
                                 }
                             }
                             types.insert(
@@ -290,11 +310,14 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                     name,
                                     encoding: encoding.to_string(),
                                     choices,
+                                    description,
                                 },
                             );
                         }
                         "composite" => {
                             let name = attr_req(&ty_node, "name", "composite")?;
+                            let description =
+                                ty_node.attribute("description").map(|s| s.to_string());
                             let mut fields = Vec::new();
                             for f_node in ty_node.children() {
                                 if !f_node.is_element() {
@@ -320,6 +343,9 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                             length,
                                             presence,
                                             constant,
+                                            description: f_node
+                                                .attribute("description")
+                                                .map(|s| s.to_string()),
                                         });
                                     }
                                     "ref" => {
@@ -337,7 +363,14 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                     _ => {}
                                 }
                             }
-                            types.insert(name.clone(), TypeDef::Composite { name, fields });
+                            types.insert(
+                                name.clone(),
+                                TypeDef::Composite {
+                                    name,
+                                    fields,
+                                    description,
+                                },
+                            );
                         }
                         _ => {}
                     }
@@ -392,6 +425,7 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                 since_version,
                                 semantic_type,
                                 value_ref,
+                                description: f.attribute("description").map(|s| s.to_string()),
                             }));
                         }
                         "group" => {
@@ -496,6 +530,7 @@ fn parse_group(node: &roxmltree::Node, parent_name: &str) -> Result<Group, Parse
                     since_version: attr_opt_u32(&child, "sinceVersion", &fname)?,
                     semantic_type: child.attribute("semanticType").map(|s| s.to_string()),
                     value_ref,
+                    description: child.attribute("description").map(|s| s.to_string()),
                 }));
             }
             "group" => {
