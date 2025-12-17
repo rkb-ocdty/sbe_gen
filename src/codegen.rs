@@ -212,18 +212,48 @@ fn generate_types(
                 encoding,
                 values,
             } => {
-                let rust_type = primitive_to_rust(encoding, opts).unwrap_or_else(|| "u8".into());
+                let primitive = encoding_primitive(encoding, types);
+                let rust_type = primitive
+                    .as_deref()
+                    .and_then(|p| primitive_to_rust(p, opts))
+                    .or_else(|| primitive_to_rust(encoding, opts))
+                    .unwrap_or_else(|| "u8".into());
+                let repr_ty = primitive
+                    .as_deref()
+                    .and_then(optional_host_type)
+                    .unwrap_or("u8");
+                let prim_is_char = primitive.as_deref() == Some("char");
                 code.push_str("#[repr(transparent)]\n");
                 code.push_str(
                     "#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy, PartialEq, Eq)]\n",
                 );
                 code.push_str(&format!("pub struct {}(pub {});\n", name, rust_type));
+                if !values.is_empty() {
+                    let enum_name = format!("{}Enum", name);
+                    code.push_str(&format!("#[repr({})]\n", repr_ty));
+                    code.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
+                    code.push_str(&format!("pub enum {} {{\n", enum_name));
+                    for (vname, val) in values {
+                        let literal = if prim_is_char {
+                            if val.len() == 1 {
+                                let c = val.chars().next().unwrap();
+                                format!("{}u8", c as u32)
+                            } else {
+                                val.clone()
+                            }
+                        } else {
+                            val.clone()
+                        };
+                        code.push_str(&format!("    {} = {},\n", vname, literal));
+                    }
+                    code.push_str("}\n");
+                }
                 // define associated constants for variants
                 if !values.is_empty() {
                     code.push_str(&format!("impl {} {{\n", name));
                     for (vname, val) in values {
                         // convert char values to numeric if necessary
-                        let literal = if encoding == "char" {
+                        let literal = if prim_is_char {
                             if val.len() == 1 {
                                 let c = val.chars().next().unwrap();
                                 format!("{}u8", c as u32)
@@ -234,10 +264,48 @@ fn generate_types(
                             val.clone()
                         };
                         code.push_str(&format!(
-                            "    pub const {}: Self = Self(<{}>::new({}));\n",
-                            vname, rust_type, literal
+                            "    pub const {}: Self = Self({});\n",
+                            vname,
+                            builder_value_expr(&literal, &rust_type)
                         ));
                     }
+                    if let Some(raw_expr) = scalar_expr("self.0", &rust_type) {
+                        let enum_name = format!("{}Enum", name);
+                        code.push_str(&format!(
+                            "    pub fn as_enum(self) -> Option<{enum_name}> {{\n        let raw = {raw_expr};\n        match raw {{\n",
+                            enum_name = enum_name,
+                            raw_expr = raw_expr
+                        ));
+                        for (vname, val) in values {
+                            let literal = if prim_is_char {
+                                if val.len() == 1 {
+                                    let c = val.chars().next().unwrap();
+                                    format!("{}u8", c as u32)
+                                } else {
+                                    val.clone()
+                                }
+                            } else {
+                                val.clone()
+                            };
+                            code.push_str(&format!(
+                                "            {lit} => Some({enum_name}::{vname}),\n",
+                                lit = literal,
+                                enum_name = enum_name,
+                                vname = vname
+                            ));
+                        }
+                        code.push_str("            _ => None,\n        }\n    }\n");
+                    }
+                    code.push_str("}\n");
+                    let enum_name = format!("{}Enum", name);
+                    code.push_str(&format!("impl From<{}> for {} {{\n", enum_name, name));
+                    code.push_str(&format!(
+                        "    fn from(v: {}) -> Self {{\n        let raw: {} = v as {};\n        let encoded = {};\n        Self(encoded)\n    }}\n",
+                        enum_name,
+                        repr_ty,
+                        repr_ty,
+                        builder_value_expr("raw", &rust_type)
+                    ));
                     code.push_str("}\n");
                 }
                 code.push('\n');
@@ -1480,6 +1548,23 @@ fn field_primitive(field: &Field, schema: &Schema) -> Option<String> {
         }
     } else {
         Some(field.ty.clone())
+    }
+}
+
+fn encoding_primitive(
+    encoding: &str,
+    types: &std::collections::HashMap<String, TypeDef>,
+) -> Option<String> {
+    if let Some(td) = types.get(encoding) {
+        match td {
+            TypeDef::Primitive { primitive, .. } => Some(primitive.clone()),
+            TypeDef::Enum { encoding, .. } | TypeDef::Set { encoding, .. } => {
+                encoding_primitive(encoding, types)
+            }
+            TypeDef::Composite { .. } => None,
+        }
+    } else {
+        Some(encoding.to_string())
     }
 }
 
