@@ -1,0 +1,30 @@
+# CME MDP3 pcap dump example
+
+This example crate generates CME MDP3 SBE decoders from
+`schemas/cme_mdp3/templates_FixBinary.xml` and dumps selected message
+templates from a pcap file.
+
+## Requirements
+
+- Rust toolchain
+- libpcap headers (for the `pcap` crate)
+
+## Build and run
+
+From the repo root:
+
+```shell
+cargo run --manifest-path examples/cme_mdp3_pcap_dump/Cargo.toml -- \
+  --pcap /path/to/file.pcap
+```
+
+Optional filters:
+
+- `--src-port`, `--dst-port`, `--udp-port`
+- `--src`, `--dst`
+- `--limit`
+
+## Notes
+
+- Generated decoders are written to `examples/cme_mdp3_pcap_dump/src/generated` at build time.
+- The example currently handles templates 30, 47, 48, 51, 53, and 59 (plus 4 and 12).

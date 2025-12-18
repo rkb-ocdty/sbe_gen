@@ -177,6 +177,21 @@ let framed = builder.finish_with_header();
 // let body = builder.finish();
 ```
 
+## CME MDP3 pcap dump example
+
+This repository includes a standalone example crate that generates CME
+MDP3 decoders from `examples/cme_mdp3_pcap_dump/schemas/cme_mdp3/templates_FixBinary.xml`
+and dumps Market-by-Order packets from a pcap file:
+
+```shell
+cargo run --manifest-path examples/cme_mdp3_pcap_dump/Cargo.toml -- \
+  --pcap /path/to/file.pcap
+```
+
+The example supports filters (`--src-port`, `--dst-port`, `--udp-port`,
+`--src`, `--dst`) and `--limit`. The `pcap` crate requires libpcap
+headers to be installed on your system.
+
 ## Status and limitations
 
 This project is a work‑in‑progress.  The generator covers the core SBE
