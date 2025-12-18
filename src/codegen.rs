@@ -372,16 +372,28 @@ fn generate_types(
                     "#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]\n",
                 );
                 code.push_str(&format!("pub struct {} {{\n", name));
+                let mut const_fields = Vec::new();
                 for f in fields {
                     match f {
                         CompositeField::Type {
                             name: fname,
                             primitive,
                             length,
-                            presence: _,
-                            constant: _,
+                            presence,
+                            constant,
                             description,
                         } => {
+                            if presence.as_deref() == Some("constant") {
+                                if let Some(val) = constant {
+                                    const_fields.push((
+                                        fname.clone(),
+                                        primitive.clone(),
+                                        *length,
+                                        val.clone(),
+                                    ));
+                                }
+                                continue;
+                            }
                             if let Some(rust_type) = primitive_to_rust(primitive, opts) {
                                 if let Some(len) = length {
                                     maybe_doc_comment(&mut code, description);
@@ -407,6 +419,34 @@ fn generate_types(
                     }
                 }
                 code.push_str("}\n\n");
+                if !const_fields.is_empty() {
+                    code.push_str(&format!("impl {} {{\n", name));
+                    for (fname, prim, len, val) in const_fields {
+                        if let Some(rust_type) = primitive_to_rust(&prim, opts) {
+                            let cname = fname.to_uppercase();
+                            if let Some(len) = len {
+                                if len > 1 {
+                                    if let Some((ty, expr)) =
+                                        const_array_expr(&prim, &rust_type, &val, len)
+                                    {
+                                        code.push_str(&format!(
+                                            "    pub const {}: {} = {};\n",
+                                            cname, ty, expr
+                                        ));
+                                    }
+                                    continue;
+                                }
+                            }
+                            if let Some(expr) = const_scalar_expr(&prim, &rust_type, &val) {
+                                code.push_str(&format!(
+                                    "    pub const {}: {} = {};\n",
+                                    cname, rust_type, expr
+                                ));
+                            }
+                        }
+                    }
+                    code.push_str("}\n\n");
+                }
             }
         }
     }
@@ -872,6 +912,79 @@ fn primitive_default_value(prim: &str) -> &'static str {
     }
 }
 
+fn const_scalar_expr(prim: &str, rust_type: &str, raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let value = match prim {
+        "char" => {
+            let byte = trimmed.as_bytes().first().copied().unwrap_or(0);
+            format!("{}u8", byte)
+        }
+        "boolean" => match trimmed {
+            "true" => "1u8".into(),
+            "false" => "0u8".into(),
+            other => other.to_string(),
+        },
+        _ => trimmed.to_string(),
+    };
+    let base = rust_type.rsplit("::").next().unwrap_or(rust_type);
+    Some(match base {
+        "U16" | "I16" | "U32" | "I32" | "U64" | "I64" | "F32" | "F64" => {
+            format!("{}::new({})", rust_type, value)
+        }
+        _ => value,
+    })
+}
+
+fn const_array_expr(
+    prim: &str,
+    rust_type: &str,
+    raw: &str,
+    len: usize,
+) -> Option<(String, String)> {
+    if len == 0 {
+        return None;
+    }
+    if prim == "char" {
+        let mut bytes = raw.as_bytes().to_vec();
+        while bytes.len() < len {
+            bytes.push(0u8);
+        }
+        if bytes.len() > len {
+            bytes.truncate(len);
+        }
+        let expr = format!(
+            "[{}]",
+            bytes
+                .iter()
+                .map(|b| format!("{}u8", b))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let ty = format!("[{}; {}]", rust_type, len);
+        return Some((ty, expr));
+    }
+    let mut parts: Vec<&str> = raw
+        .split(|c: char| c.is_ascii_whitespace() || c == ',')
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.is_empty() {
+        parts.push(primitive_default_value(prim));
+    }
+    let mut exprs = Vec::new();
+    for part in &parts {
+        exprs.push(const_scalar_expr(prim, rust_type, part)?);
+    }
+    if exprs.len() < len {
+        let fill = exprs.last().cloned()?;
+        exprs.resize(len, fill);
+    } else if exprs.len() > len {
+        exprs.truncate(len);
+    }
+    let expr = format!("[{}]", exprs.join(", "));
+    let ty = format!("[{}; {}]", rust_type, len);
+    Some((ty, expr))
+}
+
 /// Resolve a field's type name to the appropriate Rust type.  This
 /// consults the type map for user defined types or falls back to
 /// primitive mapping.  Unsupported types return `None`, causing the
@@ -982,8 +1095,14 @@ fn type_size_bytes(
                 for f in fields {
                     match f {
                         CompositeField::Type {
-                            primitive, length, ..
+                            primitive,
+                            length,
+                            presence,
+                            ..
                         } => {
+                            if presence.as_deref() == Some("constant") {
+                                continue;
+                            }
                             let base = primitive_size_bytes(primitive)?;
                             total += base * length.unwrap_or(1);
                         }
@@ -1081,7 +1200,15 @@ fn length_kind_for_data(ty: &str, schema: &Schema, opts: &GeneratorOptions) -> L
             }
             TypeDef::Composite { fields, .. } => {
                 for f in fields {
-                    if let CompositeField::Type { primitive, .. } = f {
+                    if let CompositeField::Type {
+                        primitive,
+                        presence,
+                        ..
+                    } = f
+                    {
+                        if presence.as_deref() == Some("constant") {
+                            continue;
+                        }
                         if let Some(kind) = primitive_length_kind(primitive) {
                             return kind;
                         }
@@ -1404,7 +1531,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
 
     if has_any_var {
         code.push_str(&format!(
-            "impl<'a> Iterator for {}<'a> {{\n    type Item = {}<'a>;\n    fn next(&mut self) -> Option<Self::Item> {{\n        if self.entries_left == 0 {{\n            return None;\n        }}\n        let (body, rest) = Ref::<_, {}>::from_prefix(self.remaining).ok()?;\n        let mut tail = rest;\n",
+            "impl<'a> Iterator for {}<'a> {{\n    type Item = {}<'a>;\n    fn next(&mut self) -> Option<Self::Item> {{\n        if self.entries_left == 0 {{\n            return None;\n        }}\n        let blen = self.block_length;\n        if blen > self.remaining.len() {{\n            return None;\n        }}\n        let (entry, mut tail) = self.remaining.split_at(blen);\n        let (body, _) = Ref::<_, {}>::from_prefix(entry).ok()?;\n",
             iter_name, entry_view, entry_struct
         ));
         let mut data_idx = 0;
@@ -1458,10 +1585,10 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         code.push_str(&format!("impl<'a> Iterator for {}<'a> {{\n", iter_name));
         code.push_str(&format!("    type Item = {}<'a>;\n", entry_view));
         code.push_str(
-            "    fn next(&mut self) -> Option<Self::Item> {\n        if self.entries_left == 0 {\n            return None;\n        }\n",
+            "    fn next(&mut self) -> Option<Self::Item> {\n        if self.entries_left == 0 {\n            return None;\n        }\n        let blen = self.block_length;\n        if blen > self.remaining.len() {\n            return None;\n        }\n",
         );
         code.push_str(&format!(
-            "        let (body, tail) = Ref::<_, {}>::from_prefix(self.remaining).ok()?;\n",
+            "        let (entry, tail) = self.remaining.split_at(blen);\n        let (body, _) = Ref::<_, {}>::from_prefix(entry).ok()?;\n",
             entry_struct
         ));
         code.push_str(
@@ -1827,10 +1954,14 @@ fn composite_field_offset(
                     name,
                     primitive,
                     length,
+                    presence,
                     ..
                 } => {
                     if name.to_snake_case() == target {
                         return Some(cur);
+                    }
+                    if presence.as_deref() == Some("constant") {
+                        continue;
                     }
                     if let Some(sz) = primitive_size_bytes(primitive) {
                         cur += sz * length.unwrap_or(1);
