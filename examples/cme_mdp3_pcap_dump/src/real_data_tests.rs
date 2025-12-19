@@ -1,0 +1,162 @@
+use std::mem;
+
+use crate::generated::cme_mdp3::md_incremental_refresh_order_book47 as inc_book;
+use crate::generated::cme_mdp3::md_incremental_refresh_session_statistics51 as session_stats;
+use crate::generated::cme_mdp3::md_incremental_refresh_trade_summary48 as trade_summary;
+use crate::generated::cme_mdp3::security_status30 as security_status;
+use crate::generated::cme_mdp3::MessageHeader;
+use crate::{CmeMessageHeader, CmePacketHdr};
+
+const TEMPLATE_30_PACKET: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/template_30.bin"
+));
+const TEMPLATE_47_PACKET: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/template_47.bin"
+));
+const TEMPLATE_48_PACKET: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/template_48.bin"
+));
+const TEMPLATE_51_PACKET: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/template_51.bin"
+));
+
+fn parse_single_message(payload: &[u8]) -> (CmePacketHdr, MessageHeader, &[u8]) {
+    let (pkt_hdr, rest) = CmePacketHdr::parse_prefix(payload).expect("packet header");
+    let (cme_hdr, tail) = CmeMessageHeader::parse_prefix(rest).expect("message header");
+
+    let msg_len = cme_hdr.msg_len.get() as usize;
+    let header_len = mem::size_of::<CmeMessageHeader>();
+    assert!(
+        msg_len >= header_len,
+        "message length {} smaller than header {}",
+        msg_len,
+        header_len
+    );
+    let body_len = msg_len - header_len;
+    assert!(
+        tail.len() >= body_len,
+        "message body truncated: need {}, have {}",
+        body_len,
+        tail.len()
+    );
+    let (body, remainder) = tail.split_at(body_len);
+    assert!(
+        remainder.is_empty(),
+        "fixture packet has unexpected trailing bytes"
+    );
+
+    (*pkt_hdr, cme_hdr.sbe_hdr, body)
+}
+
+#[test]
+fn template_30_security_status() {
+    let (pkt_hdr, msg_hdr, body) = parse_single_message(TEMPLATE_30_PACKET);
+    assert_eq!(msg_hdr.template_id.get(), 30);
+    assert_eq!(pkt_hdr.seq.get(), 3896);
+    assert_eq!(pkt_hdr.sending_time.get(), 1_689_544_800_018_487_637);
+
+    let (view, tail) = security_status::parse_with_header(body, &msg_hdr).expect("parse");
+    assert!(tail.is_empty());
+
+    let msg = view.body;
+    assert_eq!(msg.transact_time.get(), 1_689_544_800_000_000_000);
+    assert_eq!(msg.security_group, [b'E', b'S', 0, 0, 0, 0]);
+    assert_eq!(msg.asset, [0u8; 6]);
+    assert_eq!(msg.security_id.get(), i32::MAX);
+    assert_eq!(msg.trade_date.get(), 19_555);
+    assert_eq!(msg.match_event_indicator.0, 0);
+    assert_eq!(msg.security_trading_status.0, 15);
+    assert_eq!(msg.halt_reason.0, 0);
+    assert_eq!(msg.security_trading_event.0, 0);
+}
+
+#[test]
+fn template_47_incremental_order_book() {
+    let (pkt_hdr, msg_hdr, body) = parse_single_message(TEMPLATE_47_PACKET);
+    assert_eq!(msg_hdr.template_id.get(), 47);
+    assert_eq!(pkt_hdr.seq.get(), 3899);
+    assert_eq!(pkt_hdr.sending_time.get(), 1_689_544_800_021_030_601);
+
+    let (view, after_fixed) = inc_book::parse_with_header(body, &msg_hdr).expect("parse");
+    assert_eq!(view.body.transact_time.get(), 1_689_544_800_000_000_000);
+    assert_eq!(view.body.match_event_indicator.0, 0);
+
+    let entries = inc_book::parse_no_md_entries(after_fixed).expect("entries");
+    assert_eq!(entries.count(), 34);
+    assert_eq!(entries.header.block_length.get(), 40);
+
+    let first = entries.iter().next().expect("first entry");
+    let body = first.body;
+    assert_eq!(body.order_id.get(), 6_412_148_621_783);
+    assert_eq!(body.md_order_priority.get(), 15_098_154_137);
+    assert_eq!(body.md_entry_px.mantissa.get(), 455_450_000_000_000);
+    assert_eq!(body.md_display_qty.get(), 1);
+    assert_eq!(body.security_id.get(), 3_445);
+    assert_eq!(body.md_update_action.0, 2);
+    assert_eq!(body.md_entry_type.0, 48);
+}
+
+#[test]
+fn template_48_trade_summary() {
+    let (pkt_hdr, msg_hdr, body) = parse_single_message(TEMPLATE_48_PACKET);
+    assert_eq!(msg_hdr.template_id.get(), 48);
+    assert_eq!(pkt_hdr.seq.get(), 3298);
+    assert_eq!(pkt_hdr.sending_time.get(), 1_689_544_800_019_788_326);
+
+    let (view, after_fixed) = trade_summary::parse_with_header(body, &msg_hdr).expect("parse");
+    assert_eq!(view.body.transact_time.get(), 1_689_544_800_000_000_000);
+    assert_eq!(view.body.match_event_indicator.0, 1);
+
+    let entries = trade_summary::parse_no_md_entries(after_fixed).expect("entries");
+    assert_eq!(entries.count(), 1);
+    assert_eq!(entries.header.block_length.get(), 32);
+
+    let mut iter = entries.iter();
+    let first = iter.next().expect("first entry");
+    let body = first.body;
+    assert_eq!(body.md_entry_px.mantissa.get(), 30_500_000_000_000);
+    assert_eq!(body.md_entry_size.get(), 2);
+    assert_eq!(body.security_id.get(), 5_785);
+    assert_eq!(body.rpt_seq.get(), 45);
+    assert_eq!(body.number_of_orders.get(), 3);
+    assert_eq!(body.aggressor_side.0, 0);
+    assert_eq!(body.md_update_action.0, 0);
+    assert_eq!(body.md_entry_type.0, 177);
+    assert_eq!(body.md_trade_entry_id.get(), 0);
+
+    // Consume the one entry so the remainder is at the next group.
+    let after_entries = iter.remainder();
+    let order_entries =
+        trade_summary::parse_no_order_id_entries(after_entries).expect("order entries");
+    assert_eq!(order_entries.count(), 0);
+}
+
+#[test]
+fn template_51_session_statistics() {
+    let (pkt_hdr, msg_hdr, body) = parse_single_message(TEMPLATE_51_PACKET);
+    assert_eq!(msg_hdr.template_id.get(), 51);
+    assert_eq!(pkt_hdr.seq.get(), 32_356);
+    assert_eq!(pkt_hdr.sending_time.get(), 1_689_544_800_096_718_729);
+
+    let (view, after_fixed) = session_stats::parse_with_header(body, &msg_hdr).expect("parse");
+    assert_eq!(view.body.transact_time.get(), 1_689_544_800_087_997_437);
+    assert_eq!(view.body.match_event_indicator.0, 136);
+
+    let entries = session_stats::parse_no_md_entries(after_fixed).expect("entries");
+    assert_eq!(entries.count(), 28);
+    assert_eq!(entries.header.block_length.get(), 24);
+
+    let first = entries.iter().next().expect("first entry");
+    let body = first.body;
+    assert_eq!(body.md_entry_px.mantissa.get(), 875_000_000_000);
+    assert_eq!(body.security_id.get(), 4_242_033);
+    assert_eq!(body.rpt_seq.get(), 5);
+    assert_eq!(body.open_close_settl_flag.0, 255);
+    assert_eq!(body.md_update_action.0, 0);
+    assert_eq!(body.md_entry_type.0, 78);
+    assert_eq!(body.md_entry_size.get(), i32::MAX);
+}

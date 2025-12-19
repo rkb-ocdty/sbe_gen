@@ -637,3 +637,6 @@ fn decode_ascii(bytes: &[u8]) -> String {
         .trim_end()
         .to_string()
 }
+
+#[cfg(test)]
+mod real_data_tests;
