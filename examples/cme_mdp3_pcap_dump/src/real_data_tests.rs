@@ -6,6 +6,8 @@ use crate::generated::cme_mdp3::md_incremental_refresh_trade_summary48 as trade_
 use crate::generated::cme_mdp3::security_status30 as security_status;
 use crate::generated::cme_mdp3::MessageHeader;
 use crate::{CmeMessageHeader, CmePacketHdr};
+use zerocopy::byteorder::little_endian::U16;
+use zerocopy::IntoBytes;
 
 const TEMPLATE_30_PACKET: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -50,6 +52,38 @@ fn parse_single_message(payload: &[u8]) -> (CmePacketHdr, MessageHeader, &[u8]) 
     );
 
     (*pkt_hdr, cme_hdr.sbe_hdr, body)
+}
+
+fn group_entry_len(block_length: u16, declared: usize) -> usize {
+    if block_length == 0 {
+        declared
+    } else {
+        block_length as usize
+    }
+}
+
+fn rebuild_payload(payload: &[u8], rebuild_body: impl FnOnce(&MessageHeader, &[u8]) -> Vec<u8>) {
+    let (pkt_hdr, msg_hdr, body) = parse_single_message(payload);
+    let rebuilt_body = rebuild_body(&msg_hdr, body);
+    let msg_len = mem::size_of::<CmeMessageHeader>() + rebuilt_body.len();
+    let cme_hdr = CmeMessageHeader {
+        msg_len: U16::new(msg_len as u16),
+        sbe_hdr: msg_hdr,
+    };
+
+    let mut rebuilt = Vec::with_capacity(mem::size_of::<CmePacketHdr>() + msg_len);
+    rebuilt.extend_from_slice(pkt_hdr.as_bytes());
+    rebuilt.extend_from_slice(cme_hdr.as_bytes());
+    rebuilt.extend_from_slice(&rebuilt_body);
+
+    assert_eq!(rebuilt, payload);
+}
+
+fn append_fixed_block(out: &mut Vec<u8>, msg_bytes: &[u8], block_len: usize) {
+    out.extend_from_slice(msg_bytes);
+    if block_len > msg_bytes.len() {
+        out.extend(std::iter::repeat(0u8).take(block_len - msg_bytes.len()));
+    }
 }
 
 #[test]
@@ -159,4 +193,102 @@ fn template_51_session_statistics() {
     assert_eq!(body.md_update_action.0, 0);
     assert_eq!(body.md_entry_type.0, 78);
     assert_eq!(body.md_entry_size.get(), i32::MAX);
+}
+
+#[test]
+fn template_30_roundtrip() {
+    rebuild_payload(TEMPLATE_30_PACKET, |msg_hdr, body| {
+        let (view, _) = security_status::parse_with_header(body, msg_hdr).expect("parse");
+        let msg = *view.body;
+        msg.as_bytes()[..view.acting_block_length].to_vec()
+    });
+}
+
+#[test]
+fn template_47_roundtrip() {
+    rebuild_payload(TEMPLATE_47_PACKET, |msg_hdr, body| {
+        let (view, after_fixed) = inc_book::parse_with_header(body, msg_hdr).expect("parse");
+        let msg = *view.body;
+        let mut out = Vec::new();
+        append_fixed_block(&mut out, msg.as_bytes(), view.acting_block_length);
+
+        let entries = inc_book::parse_no_md_entries(after_fixed).expect("entries");
+        out.extend_from_slice(entries.header.as_bytes());
+        let entry_len = group_entry_len(
+            entries.header.block_length.get(),
+            inc_book::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize,
+        );
+        let mut iter = entries.iter();
+        while let Some(entry) = iter.next() {
+            let body = *entry.body;
+            append_fixed_block(&mut out, body.as_bytes(), entry_len);
+        }
+        out.extend_from_slice(iter.remainder());
+
+        out
+    });
+}
+
+#[test]
+fn template_48_roundtrip() {
+    rebuild_payload(TEMPLATE_48_PACKET, |msg_hdr, body| {
+        let (view, after_fixed) = trade_summary::parse_with_header(body, msg_hdr).expect("parse");
+        let msg = *view.body;
+        let mut out = Vec::new();
+        append_fixed_block(&mut out, msg.as_bytes(), view.acting_block_length);
+
+        let entries = trade_summary::parse_no_md_entries(after_fixed).expect("entries");
+        out.extend_from_slice(entries.header.as_bytes());
+        let entry_len = group_entry_len(
+            entries.header.block_length.get(),
+            trade_summary::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize,
+        );
+        let mut iter = entries.iter();
+        while let Some(entry) = iter.next() {
+            let body = *entry.body;
+            append_fixed_block(&mut out, body.as_bytes(), entry_len);
+        }
+
+        let after_entries = iter.remainder();
+        let order_entries =
+            trade_summary::parse_no_order_id_entries(after_entries).expect("order entries");
+        out.extend_from_slice(order_entries.header.as_bytes());
+        let order_len = group_entry_len(
+            order_entries.header.block_length.get(),
+            trade_summary::NoOrderIDEntriesGroupBuilder::BLOCK_LENGTH as usize,
+        );
+        let mut order_iter = order_entries.iter();
+        while let Some(entry) = order_iter.next() {
+            let body = *entry.body;
+            append_fixed_block(&mut out, body.as_bytes(), order_len);
+        }
+        out.extend_from_slice(order_iter.remainder());
+
+        out
+    });
+}
+
+#[test]
+fn template_51_roundtrip() {
+    rebuild_payload(TEMPLATE_51_PACKET, |msg_hdr, body| {
+        let (view, after_fixed) = session_stats::parse_with_header(body, msg_hdr).expect("parse");
+        let msg = *view.body;
+        let mut out = Vec::new();
+        append_fixed_block(&mut out, msg.as_bytes(), view.acting_block_length);
+
+        let entries = session_stats::parse_no_md_entries(after_fixed).expect("entries");
+        out.extend_from_slice(entries.header.as_bytes());
+        let entry_len = group_entry_len(
+            entries.header.block_length.get(),
+            session_stats::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize,
+        );
+        let mut iter = entries.iter();
+        while let Some(entry) = iter.next() {
+            let body = *entry.body;
+            append_fixed_block(&mut out, body.as_bytes(), entry_len);
+        }
+        out.extend_from_slice(iter.remainder());
+
+        out
+    });
 }
