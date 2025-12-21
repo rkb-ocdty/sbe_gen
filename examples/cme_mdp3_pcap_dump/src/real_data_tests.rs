@@ -82,8 +82,12 @@ fn rebuild_payload(payload: &[u8], rebuild_body: impl FnOnce(&MessageHeader, &[u
 fn append_fixed_block(out: &mut Vec<u8>, msg_bytes: &[u8], block_len: usize) {
     out.extend_from_slice(msg_bytes);
     if block_len > msg_bytes.len() {
-        out.extend(std::iter::repeat(0u8).take(block_len - msg_bytes.len()));
+        out.extend(std::iter::repeat_n(0u8, block_len - msg_bytes.len()));
     }
+}
+
+fn set_u8(buf: &mut [u8], offset: usize, value: u8) {
+    *buf.get_mut(offset).expect("offset in bounds") = value;
 }
 
 #[test]
@@ -219,7 +223,7 @@ fn template_47_roundtrip() {
             inc_book::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize,
         );
         let mut iter = entries.iter();
-        while let Some(entry) = iter.next() {
+        for entry in iter.by_ref() {
             let body = *entry.body;
             append_fixed_block(&mut out, body.as_bytes(), entry_len);
         }
@@ -244,7 +248,7 @@ fn template_48_roundtrip() {
             trade_summary::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize,
         );
         let mut iter = entries.iter();
-        while let Some(entry) = iter.next() {
+        for entry in iter.by_ref() {
             let body = *entry.body;
             append_fixed_block(&mut out, body.as_bytes(), entry_len);
         }
@@ -258,7 +262,7 @@ fn template_48_roundtrip() {
             trade_summary::NoOrderIDEntriesGroupBuilder::BLOCK_LENGTH as usize,
         );
         let mut order_iter = order_entries.iter();
-        while let Some(entry) = order_iter.next() {
+        for entry in order_iter.by_ref() {
             let body = *entry.body;
             append_fixed_block(&mut out, body.as_bytes(), order_len);
         }
@@ -283,9 +287,246 @@ fn template_51_roundtrip() {
             session_stats::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize,
         );
         let mut iter = entries.iter();
-        while let Some(entry) = iter.next() {
+        for entry in iter.by_ref() {
             let body = *entry.body;
             append_fixed_block(&mut out, body.as_bytes(), entry_len);
+        }
+        out.extend_from_slice(iter.remainder());
+
+        out
+    });
+}
+
+#[test]
+fn template_30_builder_roundtrip() {
+    rebuild_payload(TEMPLATE_30_PACKET, |msg_hdr, body| {
+        let (view, _) = security_status::parse_with_header(body, msg_hdr).expect("parse");
+        let msg = *view.body;
+
+        let mut builder = security_status::SecurityStatus30Builder::new();
+        builder
+            .transact_time(msg.transact_time)
+            .security_group(msg.security_group)
+            .asset(msg.asset)
+            .security_id(msg.security_id)
+            .trade_date(msg.trade_date);
+        let mut out = builder.finish();
+
+        set_u8(
+            &mut out,
+            security_status::SecurityStatus30::MATCHEVENTINDICATOR_OFFSET as usize,
+            msg.match_event_indicator.0,
+        );
+        set_u8(
+            &mut out,
+            security_status::SecurityStatus30::SECURITYTRADINGSTATUS_OFFSET as usize,
+            msg.security_trading_status.0,
+        );
+        set_u8(
+            &mut out,
+            security_status::SecurityStatus30::HALTREASON_OFFSET as usize,
+            msg.halt_reason.0,
+        );
+        set_u8(
+            &mut out,
+            security_status::SecurityStatus30::SECURITYTRADINGEVENT_OFFSET as usize,
+            msg.security_trading_event.0,
+        );
+
+        out
+    });
+}
+
+#[test]
+fn template_47_builder_roundtrip() {
+    rebuild_payload(TEMPLATE_47_PACKET, |msg_hdr, body| {
+        let (view, after_fixed) = inc_book::parse_with_header(body, msg_hdr).expect("parse");
+        let msg = *view.body;
+        let entries = inc_book::parse_no_md_entries(after_fixed).expect("entries");
+
+        let mut builder =
+            inc_book::MDIncrementalRefreshOrderBook47Builder::with_capacity(body.len());
+        builder
+            .transact_time(msg.transact_time)
+            .no_md_entries(|group| {
+                let iter = entries.iter();
+                for entry in iter {
+                    let body = *entry.body;
+                    group.entry(|entry| {
+                        entry
+                            .order_id(body.order_id)
+                            .md_order_priority(body.md_order_priority)
+                            .md_entry_px(body.md_entry_px)
+                            .md_display_qty(body.md_display_qty)
+                            .security_id(body.security_id);
+                    });
+                }
+            });
+
+        let mut out = builder.finish();
+        set_u8(
+            &mut out,
+            inc_book::MDIncrementalRefreshOrderBook47::MATCHEVENTINDICATOR_OFFSET as usize,
+            msg.match_event_indicator.0,
+        );
+
+        let entry_len = inc_book::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize;
+        let base = view.acting_block_length + inc_book::NoMDEntriesGroupBuilder::HEADER_SIZE;
+        let mut iter = entries.iter();
+        for (index, entry) in iter.by_ref().enumerate() {
+            let entry_base = base + index * entry_len;
+            set_u8(
+                &mut out,
+                entry_base + inc_book::NoMDEntriesEntry::MDUPDATEACTION_OFFSET as usize,
+                entry.body.md_update_action.0,
+            );
+            set_u8(
+                &mut out,
+                entry_base + inc_book::NoMDEntriesEntry::MDENTRYTYPE_OFFSET as usize,
+                entry.body.md_entry_type.0,
+            );
+        }
+        out.extend_from_slice(iter.remainder());
+
+        out
+    });
+}
+
+#[test]
+fn template_48_builder_roundtrip() {
+    rebuild_payload(TEMPLATE_48_PACKET, |msg_hdr, body| {
+        const MD_ENTRY_TYPE_OFFSET: usize = 26;
+
+        let (view, after_fixed) = trade_summary::parse_with_header(body, msg_hdr).expect("parse");
+        let msg = *view.body;
+        let entries = trade_summary::parse_no_md_entries(after_fixed).expect("entries");
+
+        let mut entry_iter = entries.iter();
+        for _ in entry_iter.by_ref() {}
+        let after_entries = entry_iter.remainder();
+        let order_entries =
+            trade_summary::parse_no_order_id_entries(after_entries).expect("order entries");
+
+        let mut builder =
+            trade_summary::MDIncrementalRefreshTradeSummary48Builder::with_capacity(body.len());
+        builder
+            .transact_time(msg.transact_time)
+            .no_md_entries(|group| {
+                let iter = entries.iter();
+                for entry in iter {
+                    let body = *entry.body;
+                    group.entry(|entry| {
+                        entry
+                            .md_entry_px(body.md_entry_px)
+                            .md_entry_size(body.md_entry_size)
+                            .security_id(body.security_id)
+                            .rpt_seq(body.rpt_seq)
+                            .number_of_orders(body.number_of_orders);
+                    });
+                }
+            })
+            .no_order_id_entries(|group| {
+                let iter = order_entries.iter();
+                for entry in iter {
+                    let body = *entry.body;
+                    group.entry(|entry| {
+                        entry.order_id(body.order_id).last_qty(body.last_qty);
+                    });
+                }
+            });
+
+        let mut out = builder.finish();
+        set_u8(
+            &mut out,
+            trade_summary::MDIncrementalRefreshTradeSummary48::MATCHEVENTINDICATOR_OFFSET as usize,
+            msg.match_event_indicator.0,
+        );
+
+        let entry_len = trade_summary::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize;
+        let base = view.acting_block_length + trade_summary::NoMDEntriesGroupBuilder::HEADER_SIZE;
+        let mut iter = entries.iter();
+        for (index, entry) in iter.by_ref().enumerate() {
+            let entry_base = base + index * entry_len;
+            set_u8(
+                &mut out,
+                entry_base + trade_summary::NoMDEntriesEntry::AGGRESSORSIDE_OFFSET as usize,
+                entry.body.aggressor_side.0,
+            );
+            set_u8(
+                &mut out,
+                entry_base + trade_summary::NoMDEntriesEntry::MDUPDATEACTION_OFFSET as usize,
+                entry.body.md_update_action.0,
+            );
+            set_u8(
+                &mut out,
+                entry_base + MD_ENTRY_TYPE_OFFSET,
+                entry.body.md_entry_type.0,
+            );
+        }
+
+        let mut order_iter = order_entries.iter();
+        for _ in order_iter.by_ref() {}
+        out.extend_from_slice(order_iter.remainder());
+
+        out
+    });
+}
+
+#[test]
+fn template_51_builder_roundtrip() {
+    rebuild_payload(TEMPLATE_51_PACKET, |msg_hdr, body| {
+        let (view, after_fixed) = session_stats::parse_with_header(body, msg_hdr).expect("parse");
+        let msg = *view.body;
+        let entries = session_stats::parse_no_md_entries(after_fixed).expect("entries");
+
+        let mut builder =
+            session_stats::MDIncrementalRefreshSessionStatistics51Builder::with_capacity(
+                body.len(),
+            );
+        builder
+            .transact_time(msg.transact_time)
+            .no_md_entries(|group| {
+                let iter = entries.iter();
+                for entry in iter {
+                    let body = *entry.body;
+                    group.entry(|entry| {
+                        entry
+                            .md_entry_px(body.md_entry_px)
+                            .security_id(body.security_id)
+                            .rpt_seq(body.rpt_seq)
+                            .md_entry_size(body.md_entry_size);
+                    });
+                }
+            });
+
+        let mut out = builder.finish();
+        set_u8(
+            &mut out,
+            session_stats::MDIncrementalRefreshSessionStatistics51::MATCHEVENTINDICATOR_OFFSET
+                as usize,
+            msg.match_event_indicator.0,
+        );
+
+        let entry_len = session_stats::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize;
+        let base = view.acting_block_length + session_stats::NoMDEntriesGroupBuilder::HEADER_SIZE;
+        let mut iter = entries.iter();
+        for (index, entry) in iter.by_ref().enumerate() {
+            let entry_base = base + index * entry_len;
+            set_u8(
+                &mut out,
+                entry_base + session_stats::NoMDEntriesEntry::OPENCLOSESETTLFLAG_OFFSET as usize,
+                entry.body.open_close_settl_flag.0,
+            );
+            set_u8(
+                &mut out,
+                entry_base + session_stats::NoMDEntriesEntry::MDUPDATEACTION_OFFSET as usize,
+                entry.body.md_update_action.0,
+            );
+            set_u8(
+                &mut out,
+                entry_base + session_stats::NoMDEntriesEntry::MDENTRYTYPE_OFFSET as usize,
+                entry.body.md_entry_type.0,
+            );
         }
         out.extend_from_slice(iter.remainder());
 
