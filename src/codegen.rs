@@ -138,6 +138,66 @@ fn collect_used_types(schema: &Schema) -> HashSet<String> {
     used
 }
 
+fn collect_schema_fields(schema: &Schema) -> Vec<&Field> {
+    let mut out = Vec::new();
+    for msg in &schema.messages {
+        collect_message_fields(msg, &mut out);
+    }
+    out
+}
+
+fn collect_message_fields<'a>(msg: &'a Message, out: &mut Vec<&'a Field>) {
+    for member in &msg.members {
+        match member {
+            MessageMember::Field(field) => out.push(field),
+            MessageMember::Group(group) => collect_group_fields(group, out),
+            MessageMember::Data(_) => {}
+        }
+    }
+}
+
+fn collect_group_fields<'a>(group: &'a Group, out: &mut Vec<&'a Field>) {
+    for member in &group.members {
+        match member {
+            GroupMember::Field(field) => out.push(field),
+            GroupMember::Group(nested) => collect_group_fields(nested, out),
+            GroupMember::Data(_) => {}
+        }
+    }
+}
+
+fn constant_type_alias_from_schema(type_name: &str, schema: &Schema) -> Option<String> {
+    let mut candidates = HashSet::new();
+    for field in collect_schema_fields(schema) {
+        if field.ty != type_name {
+            continue;
+        }
+        if let Some(value_ref) = &field.value_ref {
+            if let Some((ty, _)) = value_ref.split_once('.') {
+                if ty != type_name {
+                    if let Some(td) = schema.types.get(ty) {
+                        if !matches!(td, TypeDef::Composite { .. }) {
+                            candidates.insert(ty.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        if field.name != type_name {
+            if let Some(td) = schema.types.get(&field.name) {
+                if !matches!(td, TypeDef::Composite { .. }) {
+                    candidates.insert(field.name.clone());
+                }
+            }
+        }
+    }
+    if candidates.len() == 1 {
+        candidates.into_iter().next()
+    } else {
+        None
+    }
+}
+
 fn collect_used_types_in_message(msg: &Message, used: &mut HashSet<String>) {
     for member in &msg.members {
         match member {
@@ -278,6 +338,7 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                             .constant_type_aliases
                             .get(name)
                             .cloned()
+                            .or_else(|| constant_type_alias_from_schema(name, schema))
                             .unwrap_or_else(|| rust_type.clone());
                         code.push_str(&format!("pub type {} = {};\n", name, alias));
                     } else if let Some(value) = constant {

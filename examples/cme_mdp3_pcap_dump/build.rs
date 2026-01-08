@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -17,6 +16,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     fs::create_dir_all(&generated_root)?;
 
+    // Collect and sort all subdirectories under schemas/.
     let mut schema_dirs: Vec<PathBuf> = fs::read_dir(&schemas_dir)?
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
@@ -24,6 +24,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .collect();
     schema_dirs.sort();
 
+    // Fail if there are no subdirectories.
     if schema_dirs.is_empty() {
         return Err(format!(
             "no schema directories found under {}",
@@ -34,7 +35,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let generator_opts = generator_options();
     let mut modules = Vec::new();
+
+    // schema loop: for each schema directory
     for schema_dir in schema_dirs {
+        // derive schema name from schema directory name
         let schema_name = schema_dir
             .file_name()
             .and_then(|s| s.to_str())
@@ -46,9 +50,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         let schema_contents = fs::read_to_string(&schema_xml)
             .map_err(|e| format!("failed to read {}: {}", schema_xml.display(), e))?;
 
+        // Create the output directory: src/generated/<schema_name>.
         let output_dir = generated_root.join(&schema_name);
         fs::create_dir_all(&output_dir)?;
+
         run_generator(&schema_contents, &schema_xml, &output_dir, &generator_opts)?;
+        // run rustfmt
         format_generated(&output_dir)?;
 
         modules.push(schema_name);
@@ -58,6 +65,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// select the schema file:
+///  - Prefer templates_FixBinary.xml if present.
+///  - Otherwise, require exactly one .xml; error if zero or multiple.
 fn pick_schema_xml(dir: &Path) -> Result<PathBuf, Box<dyn Error>> {
     let preferred = dir.join("templates_FixBinary.xml");
     if preferred.is_file() {
@@ -100,26 +110,11 @@ fn run_generator(
 }
 
 fn generator_options() -> GeneratorOptions {
-    let mut constant_type_aliases = HashMap::new();
-    constant_type_aliases.insert("MDUpdateTypeNew".to_string(), "MDUpdateAction".to_string());
-    constant_type_aliases.insert(
-        "MDUpdateActionNew".to_string(),
-        "MDUpdateAction".to_string(),
-    );
-    constant_type_aliases.insert(
-        "MDEntryTypeChannelReset".to_string(),
-        "MDEntryType".to_string(),
-    );
-    constant_type_aliases.insert("MDEntryTypeLimits".to_string(), "MDEntryType".to_string());
-    constant_type_aliases.insert("MDEntryTypeTrade".to_string(), "MDEntryType".to_string());
-    constant_type_aliases.insert("MDEntryTypeVol".to_string(), "MDEntryType".to_string());
-    constant_type_aliases.insert("InstAttribType".to_string(), "i8".to_string());
     GeneratorOptions {
         allow_attr: Some(
             "#![allow(clippy::all, non_upper_case_globals, unused_parens, unused_imports, unused_mut)]"
                 .to_string(),
         ),
-        constant_type_aliases,
         ..Default::default()
     }
 }
@@ -133,6 +128,7 @@ fn write_generated_mod(root: &Path, modules: &[String]) -> Result<(), Box<dyn Er
     Ok(())
 }
 
+/// Run rustfmt across all generated .rs files in the output directory.
 fn format_generated(output_dir: &Path) -> Result<(), Box<dyn Error>> {
     let mut files = Vec::new();
     let mut stack = vec![output_dir.to_path_buf()];
