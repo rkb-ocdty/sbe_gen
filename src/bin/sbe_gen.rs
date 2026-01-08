@@ -22,6 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let xml = fs::read_to_string(&args.input)?;
     let opts = sbe_gen::GeneratorOptions {
         endian: args.endian.clone(),
+        ..Default::default()
     };
     sbe_gen::generate_to(&xml, &args.output, &opts)?;
     Ok(())

@@ -18,6 +18,7 @@
 mod codegen;
 mod parser;
 
+use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
 
@@ -27,12 +28,20 @@ pub struct GeneratorOptions {
     /// Endianness to use for multi‑byte fields.  Valid values are
     /// `"little"` or `"big"`.  Defaults to `"little"`.
     pub endian: String,
+    /// Optional crate-level allow attribute line (e.g. `#![allow(...)]`).
+    /// When set, it is inserted at the top of each generated file.
+    pub allow_attr: Option<String>,
+    /// Overrides for constant primitive type aliases. Keys are type
+    /// names, values are type names to alias to.
+    pub constant_type_aliases: HashMap<String, String>,
 }
 
 impl Default for GeneratorOptions {
     fn default() -> Self {
         Self {
             endian: "little".into(),
+            allow_attr: None,
+            constant_type_aliases: HashMap::new(),
         }
     }
 }
