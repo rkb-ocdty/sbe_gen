@@ -1,8 +1,8 @@
 /target
+**/target
+**/generated
 /.idea
 /Cargo.lock
+**/Cargo.lock
 **/*.iml
 /.cargo/registry
-/examples/cme_mdp3_pcap_dump/src/generated
-/examples/cme_mdp3_pcap_dump/target
-/examples/cme_mdp3_pcap_dump/Cargo.lock
