@@ -4,7 +4,7 @@ use std::process::Command;
 
 use tempfile::TempDir;
 
-use sbe_gen::{generate, GeneratorOptions};
+use sbe_gen::{GeneratorOptions, generate};
 
 fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
     let temp = tempfile::tempdir_in(out_dir).expect("tempdir");
@@ -75,7 +75,7 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
     let cargo_toml = r#"[package]
 name = "builder_roundtrip"
 version = "0.0.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 zerocopy = { version = "0.8", features = ["derive"] }

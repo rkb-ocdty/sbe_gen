@@ -96,10 +96,10 @@ fn main() -> Result<()> {
         dump_cme_packet(udp.payload);
         dumped += 1;
 
-        if let Some(limit) = args.limit {
-            if dumped >= limit {
-                break;
-            }
+        if let Some(limit) = args.limit
+            && dumped >= limit
+        {
+            break;
         }
     }
 
@@ -107,30 +107,31 @@ fn main() -> Result<()> {
 }
 
 fn passes_filters(args: &Args, u: &UdpDatagram<'_>) -> bool {
-    if let Some(p) = args.src_port {
-        if u.src_port != p {
-            return false;
-        }
+    if let Some(p) = args.src_port
+        && u.src_port != p
+    {
+        return false;
     }
-    if let Some(p) = args.dst_port {
-        if u.dst_port != p {
-            return false;
-        }
+    if let Some(p) = args.dst_port
+        && u.dst_port != p
+    {
+        return false;
     }
-    if let Some(p) = args.udp_port {
-        if u.src_port != p && u.dst_port != p {
-            return false;
-        }
+    if let Some(p) = args.udp_port
+        && u.src_port != p
+        && u.dst_port != p
+    {
+        return false;
     }
-    if let Some(ip) = args.src {
-        if u.src_ip != ip {
-            return false;
-        }
+    if let Some(ip) = args.src
+        && u.src_ip != ip
+    {
+        return false;
     }
-    if let Some(ip) = args.dst {
-        if u.dst_ip != ip {
-            return false;
-        }
+    if let Some(ip) = args.dst
+        && u.dst_ip != ip
+    {
+        return false;
     }
     true
 }

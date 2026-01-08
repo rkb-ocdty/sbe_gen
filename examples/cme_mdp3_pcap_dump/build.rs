@@ -4,15 +4,24 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use sbe_gen::{generate_to, GeneratorOptions};
+use sbe_gen::{GeneratorOptions, generate_to};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let schemas_dir = manifest_dir.join("schemas");
     let generated_root = manifest_dir.join("src/generated");
+    let sbe_gen_root = manifest_dir.join("..").join("..");
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={}", schemas_dir.display());
+    let sbe_gen_toml = sbe_gen_root.join("Cargo.toml");
+    if sbe_gen_toml.is_file() {
+        println!("cargo:rerun-if-changed={}", sbe_gen_toml.display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            sbe_gen_root.join("src").display()
+        );
+    }
 
     fs::create_dir_all(&generated_root)?;
 
@@ -149,7 +158,12 @@ fn format_generated(output_dir: &Path) -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let status = Command::new("rustfmt").args(&files).status()?;
+    let edition = env::var("CARGO_PKG_EDITION").unwrap_or_else(|_| "2024".to_string());
+    let status = Command::new("rustfmt")
+        .arg("--edition")
+        .arg(edition)
+        .args(&files)
+        .status()?;
     if status.success() {
         Ok(())
     } else {

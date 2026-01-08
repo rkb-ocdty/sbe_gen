@@ -5,11 +5,11 @@
 //! enums, sets and composites.  A `mod.rs` file is also emitted to
 //! re‑export the generated types for ergonomic use.
 
+use crate::GeneratorOptions;
 use crate::parser::{
     CompositeField, Field, Group, GroupMember, Message, MessageMember, Schema, TypeDef,
     VarDataField,
 };
-use crate::GeneratorOptions;
 use heck::ToSnakeCase;
 use std::collections::HashSet;
 
@@ -172,23 +172,19 @@ fn constant_type_alias_from_schema(type_name: &str, schema: &Schema) -> Option<S
         if field.ty != type_name {
             continue;
         }
-        if let Some(value_ref) = &field.value_ref {
-            if let Some((ty, _)) = value_ref.split_once('.') {
-                if ty != type_name {
-                    if let Some(td) = schema.types.get(ty) {
-                        if !matches!(td, TypeDef::Composite { .. }) {
-                            candidates.insert(ty.to_string());
-                        }
-                    }
-                }
-            }
+        if let Some(value_ref) = &field.value_ref
+            && let Some((ty, _)) = value_ref.split_once('.')
+            && ty != type_name
+            && let Some(td) = schema.types.get(ty)
+            && !matches!(td, TypeDef::Composite { .. })
+        {
+            candidates.insert(ty.to_string());
         }
-        if field.name != type_name {
-            if let Some(td) = schema.types.get(&field.name) {
-                if !matches!(td, TypeDef::Composite { .. }) {
-                    candidates.insert(field.name.clone());
-                }
-            }
+        if field.name != type_name
+            && let Some(td) = schema.types.get(&field.name)
+            && !matches!(td, TypeDef::Composite { .. })
+        {
+            candidates.insert(field.name.clone());
         }
     }
     if candidates.len() == 1 {
@@ -573,18 +569,18 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                     for (fname, prim, len, val) in const_fields {
                         if let Some(rust_type) = primitive_to_rust(&prim, opts) {
                             let cname = fname.to_uppercase();
-                            if let Some(len) = len {
-                                if len > 1 {
-                                    if let Some((ty, expr)) =
-                                        const_array_expr(&prim, &rust_type, &val, len)
-                                    {
-                                        code.push_str(&format!(
-                                            "    pub const {}: {} = {};\n",
-                                            cname, ty, expr
-                                        ));
-                                    }
-                                    continue;
+                            if let Some(len) = len
+                                && len > 1
+                            {
+                                if let Some((ty, expr)) =
+                                    const_array_expr(&prim, &rust_type, &val, len)
+                                {
+                                    code.push_str(&format!(
+                                        "    pub const {}: {} = {};\n",
+                                        cname, ty, expr
+                                    ));
                                 }
+                                continue;
                             }
                             if let Some(expr) = const_scalar_expr(&prim, &rust_type, &val) {
                                 code.push_str(&format!(
@@ -881,15 +877,15 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
                             field = field.name
                         ));
                     }
-                    if field.presence.as_deref() != Some("optional") {
-                        if let Some(ref nullv) = field.null_value {
-                            code.push_str(&format!(
+                    if field.presence.as_deref() != Some("optional")
+                        && let Some(ref nullv) = field.null_value
+                    {
+                        code.push_str(&format!(
                                 "        let null_val: {host} = \"{nullv}\".parse().expect(\"nullValue parse\");\n        assert!(raw != null_val, \"{field} uses nullValue but field is required\");\n",
                                 host = host_ty,
                                 nullv = nullv,
                                 field = field.name
                             ));
-                        }
                     }
                     code.push_str(&format!(
                         "        let encoded = {expr};\n        write_bytes_at(&mut self.buf, {offset}usize, &encoded);\n        self\n    }}\n",
@@ -1188,15 +1184,15 @@ fn td_primitive(td: &TypeDef) -> String {
 #[allow(dead_code)]
 fn resolved_size_bytes(rust_type: &str) -> Option<usize> {
     let ty = rust_type.trim();
-    if let Some(rest) = ty.strip_prefix('[') {
-        if let Some((inner, len_part)) = rest.split_once(';') {
-            let inner = inner.trim();
-            let len_part = len_part.trim().trim_end_matches(']');
-            if let Ok(n) = len_part.parse::<usize>() {
-                if let Some(sz) = resolved_size_bytes(inner) {
-                    return Some(sz * n);
-                }
-            }
+    if let Some(rest) = ty.strip_prefix('[')
+        && let Some((inner, len_part)) = rest.split_once(';')
+    {
+        let inner = inner.trim();
+        let len_part = len_part.trim().trim_end_matches(']');
+        if let Ok(n) = len_part.parse::<usize>()
+            && let Some(sz) = resolved_size_bytes(inner)
+        {
+            return Some(sz * n);
         }
     }
     let base = ty.rsplit("::").next().unwrap_or(ty);
@@ -1295,13 +1291,13 @@ fn write_fields_with_offsets(
         let field_name = field.name.to_snake_case();
         if let Some(rust_type) = resolve_type(ty_name, schema, opts, field.byte_order.as_deref()) {
             let field_sz = field_size_bytes(field, schema, opts);
-            if let (Some(target), Some(cur)) = (field.offset.map(|o| o as usize), cur_offset) {
-                if target > cur {
-                    let pad = target - cur;
-                    code.push_str(&format!("    __padding{}: [u8; {}],\n", pad_idx, pad));
-                    pad_idx += 1;
-                    cur_offset = Some(target);
-                }
+            if let (Some(target), Some(cur)) = (field.offset.map(|o| o as usize), cur_offset)
+                && target > cur
+            {
+                let pad = target - cur;
+                code.push_str(&format!("    __padding{}: [u8; {}],\n", pad_idx, pad));
+                pad_idx += 1;
+                cur_offset = Some(target);
             }
             maybe_doc_comment(code, &field.description);
             code.push_str(&format!("    pub {}: {},\n", field_name, rust_type));
@@ -1626,15 +1622,15 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
                             field = field.name
                         ));
                     }
-                    if field.presence.as_deref() != Some("optional") {
-                        if let Some(ref nullv) = field.null_value {
-                            code.push_str(&format!(
+                    if field.presence.as_deref() != Some("optional")
+                        && let Some(ref nullv) = field.null_value
+                    {
+                        code.push_str(&format!(
                                 "        let null_val: {host} = \"{nullv}\".parse().expect(\"nullValue parse\");\n        assert!(raw != null_val, \"{field} uses nullValue but field is required\");\n",
                                 host = host_ty,
                                 nullv = nullv,
                                 field = field.name
                             ));
-                        }
                     }
                     code.push_str(&format!(
                         "        let encoded = {expr};\n        write_bytes_at(self.buf, self.start + {offset}usize, &encoded);\n        self\n    }}\n",
@@ -1808,10 +1804,9 @@ fn dimension_fields(schema: &Schema, dim_type: &str, opts: &GeneratorOptions) ->
             if let CompositeField::Type {
                 name, primitive, ..
             } = f
+                && let Some(rust) = primitive_to_rust(primitive, opts)
             {
-                if let Some(rust) = primitive_to_rust(primitive, opts) {
-                    prim_fields.push((name.to_snake_case(), rust));
-                }
+                prim_fields.push((name.to_snake_case(), rust));
             }
         }
         let block = prim_fields

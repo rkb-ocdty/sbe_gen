@@ -1,7 +1,7 @@
 [package]
 name = "sbe_gen"
-version = "0.1.0"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
 authors = ["Your Name <you@example.com>"]
 description = "Simple Binary Encoding (SBE) code generator for Rust using zerocopy"
 license = "MIT OR Apache-2.0"

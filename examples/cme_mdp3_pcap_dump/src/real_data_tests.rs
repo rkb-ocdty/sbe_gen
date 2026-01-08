@@ -1,13 +1,13 @@
 use std::mem;
 
 use crate::dump::{CmeMessageHeader, CmePacketHdr};
+use crate::generated::cme_mdp3::MessageHeader;
 use crate::generated::cme_mdp3::md_incremental_refresh_order_book47 as inc_book;
 use crate::generated::cme_mdp3::md_incremental_refresh_session_statistics51 as session_stats;
 use crate::generated::cme_mdp3::md_incremental_refresh_trade_summary48 as trade_summary;
 use crate::generated::cme_mdp3::security_status30 as security_status;
-use crate::generated::cme_mdp3::MessageHeader;
-use zerocopy::byteorder::little_endian::U16;
 use zerocopy::IntoBytes;
+use zerocopy::byteorder::little_endian::U16;
 
 const TEMPLATE_30_PACKET: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use sbe_gen::{generate, GeneratorOptions};
+use sbe_gen::{GeneratorOptions, generate};
 
 #[test]
 fn generates_basic_schema() {

@@ -1,3 +1,4 @@
+use crate::generated::cme_mdp3::MessageHeader;
 use crate::generated::cme_mdp3::channel_reset4 as channel_reset;
 use crate::generated::cme_mdp3::md_incremental_refresh_order_book47 as inc_book;
 use crate::generated::cme_mdp3::md_incremental_refresh_session_statistics51 as session_stats;
@@ -6,7 +7,6 @@ use crate::generated::cme_mdp3::security_status30 as security_status;
 use crate::generated::cme_mdp3::snapshot_full_refresh_order_book53 as snap_book;
 use crate::generated::cme_mdp3::snapshot_refresh_top_orders59 as top_orders;
 use crate::generated::cme_mdp3::types::{PRICE9, PRICENULL9};
-use crate::generated::cme_mdp3::MessageHeader;
 use std::mem;
 use zerocopy::byteorder::little_endian::{U16, U32, U64};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Ref, Unaligned};
@@ -384,27 +384,15 @@ fn dump_top_orders_snapshot(msg_hdr: &MessageHeader, body: &[u8]) {
 }
 
 fn decode_u64_null(raw: u64) -> Option<u64> {
-    if raw == u64::MAX {
-        None
-    } else {
-        Some(raw)
-    }
+    if raw == u64::MAX { None } else { Some(raw) }
 }
 
 fn decode_u32_null(raw: u32) -> Option<u32> {
-    if raw == u32::MAX {
-        None
-    } else {
-        Some(raw)
-    }
+    if raw == u32::MAX { None } else { Some(raw) }
 }
 
 fn decode_i32_null(value: i32) -> Option<i32> {
-    if value == i32::MAX {
-        None
-    } else {
-        Some(value)
-    }
+    if value == i32::MAX { None } else { Some(value) }
 }
 
 fn decode_price(price: &PRICE9) -> f64 {
