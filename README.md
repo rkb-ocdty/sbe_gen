@@ -31,9 +31,8 @@ code generation for other languages.
   message header, apply the advertised block length/version at runtime,
   and expose presence checks so older payloads still parse safely.
 * **Declarative parsing helpers:** Each generated message implements a
-  `parse_prefix` helper via a `zc_parse_prefix!` macro which
-  leverages `zerocopy::Ref` to split a slice into a typed prefix and a
-  remainder.
+  `parse_prefix` helper that leverages `zerocopy::Ref` to split a slice
+  into a typed prefix and a remainder.
 * **Groups and variable data included:** Nested repeating groups are
   emitted with iterable views and entry structs, and `data` fields
   become `VarData` slices with an ergonomic `as_str()` helper.
@@ -71,7 +70,7 @@ cargo run --bin sbe_gen -- -i path/to/my-schema.xml -o src/sbe
 
 This will create a module in `src/sbe` containing one Rust file per
 message defined in the schema.  Each file starts with common
-imports and the `zc_parse_prefix!` macro.  For example, given a
+imports and includes a `parse_prefix` helper on each message type.  For example, given a
 message header like:
 
 ```xml
@@ -87,18 +86,6 @@ the generator produces the following Rust code:
 use zerocopy::{Ref, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned};
 use zerocopy::byteorder::little_endian::{U32, U64};
 
-#[macro_export]
-macro_rules! zc_parse_prefix {
-    () => {
-        #[inline]
-        pub fn parse_prefix(body: &[u8]) -> Option<(&Self, &[u8])> {
-            Ref::<_, Self>::from_prefix(body)
-                .ok()
-                .map(|(r, b)| (Ref::into_ref(r), b))
-        }
-    };
-}
-
 #[repr(C)]
 #[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]
 pub struct PacketHdr {
@@ -107,7 +94,12 @@ pub struct PacketHdr {
 }
 
 impl PacketHdr {
-    zc_parse_prefix!();
+    #[inline]
+    pub fn parse_prefix(body: &[u8]) -> Option<(&Self, &[u8])> {
+        Ref::<_, Self>::from_prefix(body)
+            .ok()
+            .map(|(r, b)| (Ref::into_ref(r), b))
+    }
 }
 ```
 
@@ -121,7 +113,7 @@ generator at compile time.
 
 ```toml
 [build-dependencies]
-sbe_gen = "0.2"
+sbe_gen = "0.3"
 ```
 
 2) Organize schemas under `schemas/<schema_name>/`:

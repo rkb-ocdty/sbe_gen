@@ -24,7 +24,12 @@ pub struct CmePacketHdr {
 }
 
 impl CmePacketHdr {
-    crate::zc_parse_prefix!();
+    #[inline]
+    pub fn parse_prefix(body: &[u8]) -> Option<(&Self, &[u8])> {
+        Ref::<_, Self>::from_prefix(body)
+            .ok()
+            .map(|(r, b)| (Ref::into_ref(r), b))
+    }
 }
 
 #[repr(C)]
@@ -35,7 +40,12 @@ pub struct CmeMessageHeader {
 }
 
 impl CmeMessageHeader {
-    crate::zc_parse_prefix!();
+    #[inline]
+    pub fn parse_prefix(body: &[u8]) -> Option<(&Self, &[u8])> {
+        Ref::<_, Self>::from_prefix(body)
+            .ok()
+            .map(|(r, b)| (Ref::into_ref(r), b))
+    }
 }
 
 pub(crate) fn dump_cme_packet(packet: &[u8]) {

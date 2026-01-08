@@ -35,7 +35,7 @@ fn generates_basic_schema() {
     assert!(order_rs.contains("pub struct Order"));
     assert!(order_rs.contains("pub id: U64"));
     assert!(order_rs.contains("pub side: Side"));
-    assert!(order_rs.contains("zc_parse_prefix!();"));
+    assert!(order_rs.contains("pub fn parse_prefix"));
 }
 
 #[test]

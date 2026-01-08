@@ -13,6 +13,8 @@ use crate::parser::{
 use heck::ToSnakeCase;
 use std::collections::HashSet;
 
+const PARSE_PREFIX_METHOD: &str = "    #[inline]\n    pub fn parse_prefix(body: &[u8]) -> Option<(&Self, &[u8])> {\n        Ref::<_, Self>::from_prefix(body)\n            .ok()\n            .map(|(r, b)| (Ref::into_ref(r), b))\n    }\n";
+
 fn push_doc_comment(buf: &mut String, text: &str) {
     for line in text.lines() {
         buf.push_str("/// ");
@@ -614,13 +616,14 @@ fn generate_message_header(opts: &GeneratorOptions) -> String {
         opts.endian
     ));
     code.push('\n');
-    code.push_str("#[macro_export]\nmacro_rules! zc_parse_prefix {\n    () => {\n        #[inline]\n        pub fn parse_prefix(body: &[u8]) -> Option<(&Self, &[u8])> {\n            Ref::<_, Self>::from_prefix(body)\n                .ok()\n                .map(|(r, b)| (Ref::into_ref(r), b))\n        }\n    };\n}\n\n");
     code.push_str("#[repr(C)]\n");
     code.push_str(
         "#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]\n",
     );
     code.push_str("pub struct MessageHeader {\n    pub block_length: U16,\n    pub template_id: U16,\n    pub schema_id: U16,\n    pub version: U16,\n}\n\n");
-    code.push_str("impl MessageHeader {\n    zc_parse_prefix!();\n}\n");
+    code.push_str("impl MessageHeader {\n");
+    code.push_str(PARSE_PREFIX_METHOD);
+    code.push_str("}\n");
     code
 }
 
@@ -726,10 +729,8 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         code.push_str("}\n\n");
     }
     // impl parse_prefix
-    code.push_str(&format!(
-        "impl {} {{\n    crate::zc_parse_prefix!();\n",
-        msg.name
-    ));
+    code.push_str(&format!("impl {} {{\n", msg.name));
+    code.push_str(PARSE_PREFIX_METHOD);
     code.push_str(&format!(
         "    pub const BLOCK_LENGTH: u16 = {};\n",
         msg_block_length

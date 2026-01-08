@@ -58,8 +58,8 @@ pub enum GeneratorError {
 /// Parse an XML schema and emit a collection of Rust source files.
 ///
 /// The returned vector contains `(filename, contents)` tuples for each
-/// generated module.  The common macro and imports are included in
-/// every file to make them standalone.
+/// generated module.  Common imports and helpers are included in every
+/// file to make them standalone.
 pub fn generate(
     schema_xml: &str,
     opts: &GeneratorOptions,
