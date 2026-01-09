@@ -35,6 +35,7 @@ pub enum TypeDef {
         primitive: String,
         length: Option<usize>,
         presence: Option<String>,
+        null_value: Option<String>,
         constant: Option<String>,
         description: Option<String>,
     },
@@ -70,6 +71,8 @@ pub enum CompositeField {
         length: Option<usize>,
         #[allow(dead_code)]
         presence: Option<String>,
+        #[allow(dead_code)]
+        null_value: Option<String>,
         #[allow(dead_code)]
         constant: Option<String>,
         #[allow(dead_code)]
@@ -247,6 +250,7 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                 .attribute("length")
                                 .and_then(|s| s.parse::<usize>().ok());
                             let presence = ty_node.attribute("presence").map(|s| s.to_string());
+                            let null_value = ty_node.attribute("nullValue").map(|s| s.to_string());
                             let constant = ty_node.text().map(|s| s.trim().to_string());
                             types.insert(
                                 name.clone(),
@@ -255,6 +259,7 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                     primitive: primitive.to_string(),
                                     length,
                                     presence,
+                                    null_value,
                                     constant,
                                     description: ty_node
                                         .attribute("description")
@@ -338,12 +343,15 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                             .and_then(|s| s.parse::<usize>().ok());
                                         let presence =
                                             f_node.attribute("presence").map(|s| s.to_string());
+                                        let null_value =
+                                            f_node.attribute("nullValue").map(|s| s.to_string());
                                         let constant = f_node.text().map(|s| s.trim().to_string());
                                         fields.push(CompositeField::Type {
                                             name: fname,
                                             primitive: primitive.to_string(),
                                             length,
                                             presence,
+                                            null_value,
                                             constant,
                                             description: f_node
                                                 .attribute("description")

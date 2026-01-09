@@ -319,6 +319,7 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                 primitive,
                 length,
                 presence,
+                null_value,
                 constant,
                 description,
             } => {
@@ -328,8 +329,12 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                 }
                 let rust_type = rust_type.unwrap();
                 maybe_doc_comment(&mut code, description);
+                let is_constant = presence.as_deref() == Some("constant");
+                let is_optional = presence.as_deref() == Some("optional");
+                let mut has_alias = false;
                 if let Some(len) = length {
                     code.push_str(&format!("pub type {} = [{}; {}];\n", name, rust_type, len));
+                    has_alias = true;
                 } else if presence.as_deref() == Some("constant") {
                     if used_types.contains(name) {
                         let alias = opts
@@ -339,6 +344,7 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                             .or_else(|| constant_type_alias_from_schema(name, schema))
                             .unwrap_or_else(|| rust_type.clone());
                         code.push_str(&format!("pub type {} = {};\n", name, alias));
+                        has_alias = true;
                     } else if let Some(value) = constant {
                         if let Some(expr) = const_scalar_expr(primitive, &rust_type, value) {
                             code.push_str(&format!(
@@ -362,6 +368,34 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                     }
                 } else {
                     code.push_str(&format!("pub type {} = {};\n", name, rust_type));
+                    has_alias = true;
+                }
+
+                if has_alias && !is_constant && (null_value.is_some() || is_optional) {
+                    let null_raw = null_value.as_deref().or_else(|| {
+                        if is_optional && length.is_none() {
+                            optional_null_literal(primitive)
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(null_raw) = null_raw {
+                        let cname = format!("{}_NULL", name.to_uppercase());
+                        if let Some(len) = length {
+                            if let Some((_, expr)) =
+                                const_array_expr(primitive, &rust_type, null_raw, *len)
+                            {
+                                code.push_str(&format!(
+                                    "pub const {}: {} = {};\n",
+                                    cname, name, expr
+                                ));
+                            }
+                        } else if let Some(expr) =
+                            const_scalar_expr(primitive, &rust_type, null_raw)
+                        {
+                            code.push_str(&format!("pub const {}: {} = {};\n", cname, name, expr));
+                        }
+                    }
                 }
             }
             TypeDef::Enum {
@@ -529,6 +563,7 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                             presence,
                             constant,
                             description,
+                            ..
                         } => {
                             if presence.as_deref() == Some("constant") {
                                 if let Some(val) = constant {
@@ -566,8 +601,8 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                     }
                 }
                 code.push_str("}\n\n");
+                let mut impl_body = String::new();
                 if !const_fields.is_empty() {
-                    code.push_str(&format!("impl {} {{\n", name));
                     for (fname, prim, len, val) in const_fields {
                         if let Some(rust_type) = primitive_to_rust(&prim, opts) {
                             let cname = fname.to_uppercase();
@@ -577,7 +612,7 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                                 if let Some((ty, expr)) =
                                     const_array_expr(&prim, &rust_type, &val, len)
                                 {
-                                    code.push_str(&format!(
+                                    impl_body.push_str(&format!(
                                         "    pub const {}: {} = {};\n",
                                         cname, ty, expr
                                     ));
@@ -585,13 +620,19 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                                 continue;
                             }
                             if let Some(expr) = const_scalar_expr(&prim, &rust_type, &val) {
-                                code.push_str(&format!(
+                                impl_body.push_str(&format!(
                                     "    pub const {}: {} = {};\n",
                                     cname, rust_type, expr
                                 ));
                             }
                         }
                     }
+                }
+                composite_null_constants(&mut impl_body, fields, schema, opts);
+                optional_methods_for_composite_fields(&mut impl_body, fields, schema, opts, "self");
+                if !impl_body.is_empty() {
+                    code.push_str(&format!("impl {} {{\n", name));
+                    code.push_str(&impl_body);
                     code.push_str("}\n\n");
                 }
             }
@@ -1926,6 +1967,119 @@ fn scalar_expr(expr: &str, rust_type: &str) -> Option<String> {
     }
 }
 
+fn type_is_optional(ty: &str, schema: &Schema) -> bool {
+    matches!(
+        schema.types.get(ty),
+        Some(TypeDef::Primitive {
+            presence: Some(p),
+            ..
+        }) if p == "optional"
+    ) || matches!(
+        schema.types.get(ty),
+        Some(TypeDef::Primitive {
+            null_value: Some(_),
+            ..
+        })
+    )
+}
+
+fn type_null_value<'a>(ty: &str, schema: &'a Schema) -> Option<&'a str> {
+    match schema.types.get(ty) {
+        Some(TypeDef::Primitive { null_value, .. }) => null_value.as_deref(),
+        _ => None,
+    }
+}
+
+fn type_length(ty: &str, schema: &Schema) -> Option<usize> {
+    match schema.types.get(ty) {
+        Some(TypeDef::Primitive { length, .. }) => *length,
+        _ => None,
+    }
+}
+
+fn type_primitive<'a>(ty: &str, schema: &'a Schema) -> Option<&'a str> {
+    match schema.types.get(ty) {
+        Some(TypeDef::Primitive { primitive, .. }) => Some(primitive.as_str()),
+        _ => None,
+    }
+}
+
+fn field_is_optional(field: &Field, schema: &Schema) -> bool {
+    match field.presence.as_deref() {
+        Some("optional") => true,
+        Some("constant") | Some("required") => false,
+        _ => field.null_value.is_some() || type_is_optional(&field.ty, schema),
+    }
+}
+
+fn field_null_value<'a>(field: &'a Field, schema: &'a Schema) -> Option<&'a str> {
+    field
+        .null_value
+        .as_deref()
+        .or_else(|| type_null_value(&field.ty, schema))
+}
+
+fn const_host_expr(prim: &str, raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let expr = match prim {
+        "char" => {
+            let byte = trimmed.as_bytes().first().copied().unwrap_or(0);
+            format!("{}u8", byte)
+        }
+        "boolean" => match trimmed {
+            "true" => "1u8".to_string(),
+            "false" => "0u8".to_string(),
+            _ => trimmed.to_string(),
+        },
+        "float" => {
+            if trimmed.eq_ignore_ascii_case("nan") {
+                "f32::NAN".to_string()
+            } else {
+                trimmed.to_string()
+            }
+        }
+        "double" => {
+            if trimmed.eq_ignore_ascii_case("nan") {
+                "f64::NAN".to_string()
+            } else {
+                trimmed.to_string()
+            }
+        }
+        _ => trimmed.to_string(),
+    };
+    Some(expr)
+}
+
+fn null_cond_for_primitive(
+    prim: &str,
+    host_type: &str,
+    null_value: Option<&str>,
+    use_default: bool,
+) -> Option<String> {
+    let is_float = host_type == "f32" || host_type == "f64";
+    if is_float {
+        if null_value.is_none() && use_default {
+            return Some("raw.is_nan()".to_string());
+        }
+        if let Some(val) = null_value
+            && val.trim().eq_ignore_ascii_case("nan")
+        {
+            return Some("raw.is_nan()".to_string());
+        }
+    }
+
+    let raw = if let Some(val) = null_value {
+        Some(val)
+    } else if use_default {
+        optional_null_literal(prim)
+    } else {
+        None
+    }?;
+
+    let expr = const_host_expr(prim, raw)?;
+    Some(format!("raw == {}", expr))
+}
+
 fn optional_methods_for_fields(
     code: &mut String,
     fields: &[&Field],
@@ -1934,26 +2088,28 @@ fn optional_methods_for_fields(
     self_expr: &str,
 ) {
     for field in fields {
-        if field.presence.as_deref() != Some("optional") {
+        if !field_is_optional(field, schema) {
             continue;
         }
         let field_name = field.name.to_snake_case();
         let method_name = format!("{}_opt", field_name);
 
-        let resolved_type = match resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+        if let Some(len) = type_length(&field.ty, schema)
+            && len > 1
         {
-            Some(t) => t,
-            None => continue,
-        };
+            continue;
+        }
 
         // Enum/set optional: return Option<EnumName> by inspecting the inner primitive
         if let Some(TypeDef::Enum { encoding, .. } | TypeDef::Set { encoding, .. }) =
             schema.types.get(&field.ty)
         {
-            let inner_rust = match primitive_to_rust(encoding, opts) {
-                Some(t) => t,
-                None => continue,
-            };
+            let inner_rust =
+                match primitive_to_rust_endian(encoding, &opts.endian, field.byte_order.as_deref())
+                {
+                    Some(t) => t,
+                    None => continue,
+                };
             if let Some(val_expr) =
                 scalar_expr(&format!("{}.{}.0", self_expr, field_name), &inner_rust)
             {
@@ -1961,14 +2117,14 @@ fn optional_methods_for_fields(
                     Some(t) => t,
                     None => continue,
                 };
-                let null_val = match optional_null_literal(encoding) {
-                    Some(v) => v,
+                let cond = match null_cond_for_primitive(
+                    encoding,
+                    host_type,
+                    field_null_value(field, schema),
+                    true,
+                ) {
+                    Some(c) => c,
                     None => continue,
-                };
-                let cond = if host_type == "f32" || host_type == "f64" {
-                    "raw.is_nan()".to_string()
-                } else {
-                    format!("raw == {}", null_val)
                 };
                 code.push_str(&format!(
                     "    pub fn {method}(&self) -> Option<{ty}> {{\n        let v = {self_expr}.{field};\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(v) }}\n    }}\n",
@@ -1987,35 +2143,254 @@ fn optional_methods_for_fields(
             Some(p) => p,
             None => continue,
         };
-        let null_val = match optional_null_literal(&prim) {
-            Some(v) => v,
-            None => continue,
-        };
         let host_type = match optional_host_type(&prim) {
             Some(t) => t,
             None => continue,
         };
 
-        let scalar = scalar_expr(&format!("{}.{}", self_expr, field_name), &resolved_type);
+        let inner_rust =
+            match primitive_to_rust_endian(&prim, &opts.endian, field.byte_order.as_deref()) {
+                Some(t) => t,
+                None => continue,
+            };
+        let scalar = scalar_expr(&format!("{}.{}", self_expr, field_name), &inner_rust);
         if let Some(val_expr) = scalar {
-            let body = if host_type == "f32" || host_type == "f64" {
-                format!(
-                    "let v = {val}; if v.is_nan() {{ None }} else {{ Some(v) }}",
-                    val = val_expr
-                )
-            } else {
-                format!(
-                    "let v = {val}; if v == {null} {{ None }} else {{ Some(v) }}",
-                    val = val_expr,
-                    null = null_val
-                )
+            let cond = match null_cond_for_primitive(
+                &prim,
+                host_type,
+                field_null_value(field, schema),
+                true,
+            ) {
+                Some(c) => c,
+                None => continue,
             };
             code.push_str(&format!(
-                "    pub fn {method}(&self) -> Option<{ty}> {{ {body} }}\n",
+                "    pub fn {method}(&self) -> Option<{ty}> {{\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(raw) }}\n    }}\n",
                 method = method_name,
                 ty = host_type,
-                body = body,
+                val = val_expr,
+                cond = cond,
             ));
+        }
+    }
+}
+
+fn optional_methods_for_composite_fields(
+    code: &mut String,
+    fields: &[CompositeField],
+    schema: &Schema,
+    opts: &GeneratorOptions,
+    self_expr: &str,
+) {
+    for field in fields {
+        match field {
+            CompositeField::Type {
+                name,
+                primitive,
+                length,
+                presence,
+                null_value,
+                ..
+            } => {
+                if presence.as_deref() == Some("constant") {
+                    continue;
+                }
+                let is_optional = match presence.as_deref() {
+                    Some("optional") => true,
+                    Some("required") => false,
+                    _ => null_value.is_some(),
+                };
+                if !is_optional {
+                    continue;
+                }
+                if let Some(len) = length
+                    && *len > 1
+                {
+                    continue;
+                }
+                let rust_type = match primitive_to_rust(primitive, opts) {
+                    Some(t) => t,
+                    None => continue,
+                };
+                let val_expr = match scalar_expr(
+                    &format!("{}.{}", self_expr, name.to_snake_case()),
+                    &rust_type,
+                ) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let host_type = match optional_host_type(primitive) {
+                    Some(t) => t,
+                    None => continue,
+                };
+                let cond = match null_cond_for_primitive(
+                    primitive,
+                    host_type,
+                    null_value.as_deref(),
+                    true,
+                ) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                let method_name = format!("{}_opt", name.to_snake_case());
+                code.push_str(&format!(
+                    "    pub fn {method}(&self) -> Option<{ty}> {{\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(raw) }}\n    }}\n",
+                    method = method_name,
+                    ty = host_type,
+                    val = val_expr,
+                    cond = cond,
+                ));
+            }
+            CompositeField::Ref { name, ty } => {
+                if !type_is_optional(ty, schema) {
+                    continue;
+                }
+                if let Some(len) = type_length(ty, schema)
+                    && len > 1
+                {
+                    continue;
+                }
+                let prim = match type_primitive(ty, schema) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let rust_type = match primitive_to_rust(prim, opts) {
+                    Some(t) => t,
+                    None => continue,
+                };
+                let val_expr = match scalar_expr(
+                    &format!("{}.{}", self_expr, name.to_snake_case()),
+                    &rust_type,
+                ) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let host_type = match optional_host_type(prim) {
+                    Some(t) => t,
+                    None => continue,
+                };
+                let cond = match null_cond_for_primitive(
+                    prim,
+                    host_type,
+                    type_null_value(ty, schema),
+                    true,
+                ) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                let method_name = format!("{}_opt", name.to_snake_case());
+                code.push_str(&format!(
+                    "    pub fn {method}(&self) -> Option<{ty}> {{\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(raw) }}\n    }}\n",
+                    method = method_name,
+                    ty = host_type,
+                    val = val_expr,
+                    cond = cond,
+                ));
+            }
+        }
+    }
+}
+
+fn composite_null_constants(
+    code: &mut String,
+    fields: &[CompositeField],
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) {
+    for field in fields {
+        match field {
+            CompositeField::Type {
+                name,
+                primitive,
+                length,
+                presence,
+                null_value,
+                ..
+            } => {
+                if presence.as_deref() == Some("constant") {
+                    continue;
+                }
+                let null_raw = null_value.as_deref().or_else(|| {
+                    if presence.as_deref() == Some("optional") && length.is_none() {
+                        optional_null_literal(primitive)
+                    } else {
+                        None
+                    }
+                });
+                let null_raw = match null_raw {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let rust_type = match primitive_to_rust(primitive, opts) {
+                    Some(t) => t,
+                    None => continue,
+                };
+                let cname = format!("{}_NULL", name.to_uppercase());
+                if let Some(len) = length {
+                    if null_value.is_none() {
+                        continue;
+                    }
+                    if let Some((ty, expr)) =
+                        const_array_expr(primitive, &rust_type, null_raw, *len)
+                    {
+                        code.push_str(&format!("    pub const {}: {} = {};\n", cname, ty, expr));
+                    }
+                } else if let Some(expr) = const_scalar_expr(primitive, &rust_type, null_raw) {
+                    code.push_str(&format!(
+                        "    pub const {}: {} = {};\n",
+                        cname, rust_type, expr
+                    ));
+                }
+            }
+            CompositeField::Ref { name, ty } => {
+                let (prim, length, presence, null_value) = if let Some(TypeDef::Primitive {
+                    primitive,
+                    length,
+                    presence,
+                    null_value,
+                    ..
+                }) = schema.types.get(ty)
+                {
+                    (
+                        primitive.as_str(),
+                        *length,
+                        presence.as_deref(),
+                        null_value.as_deref(),
+                    )
+                } else {
+                    continue;
+                };
+                let is_optional = presence == Some("optional") || null_value.is_some();
+                if !is_optional {
+                    continue;
+                }
+                let null_raw = null_value.or_else(|| {
+                    if presence == Some("optional") && length.is_none() {
+                        optional_null_literal(prim)
+                    } else {
+                        None
+                    }
+                });
+                let null_raw = match null_raw {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let rust_type = match primitive_to_rust(prim, opts) {
+                    Some(t) => t,
+                    None => continue,
+                };
+                let cname = format!("{}_NULL", name.to_uppercase());
+                if let Some(len) = length {
+                    if null_value.is_none() {
+                        continue;
+                    }
+                    if let Some((_, expr)) = const_array_expr(prim, &rust_type, null_raw, len) {
+                        code.push_str(&format!("    pub const {}: {} = {};\n", cname, ty, expr));
+                    }
+                } else if let Some(expr) = const_scalar_expr(prim, &rust_type, null_raw) {
+                    code.push_str(&format!("    pub const {}: {} = {};\n", cname, ty, expr));
+                }
+            }
         }
     }
 }
