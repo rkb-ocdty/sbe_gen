@@ -297,7 +297,9 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
         opts,
         Some("#![allow(dead_code, non_camel_case_types)]"),
     );
-    code.push_str("use zerocopy::{FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned};\n");
+    code.push_str(
+        "use zerocopy::{Ref, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned};\n",
+    );
     code.push_str(&format!(
         "use zerocopy::byteorder::{}_endian::*;\n",
         opts.endian
@@ -421,6 +423,9 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                     "#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy, PartialEq, Eq)]\n",
                 );
                 code.push_str(&format!("pub struct {}(pub {});\n", name, rust_type));
+                code.push_str(&format!("impl {} {{\n", name));
+                code.push_str(PARSE_PREFIX_METHOD);
+                code.push_str("}\n\n");
                 if !values.is_empty() {
                     let enum_name = format!("{}Enum", name);
                     maybe_doc_comment(&mut code, description);
@@ -524,6 +529,9 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                     "#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy, PartialEq, Eq)]\n",
                 );
                 code.push_str(&format!("pub struct {}(pub {});\n", name, rust_type));
+                code.push_str(&format!("impl {} {{\n", name));
+                code.push_str(PARSE_PREFIX_METHOD);
+                code.push_str("}\n\n");
                 if !choices.is_empty() {
                     code.push_str(&format!("impl {} {{\n", name));
                     for (cname, bit, cdesc) in choices {
@@ -600,6 +608,9 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                         }
                     }
                 }
+                code.push_str("}\n\n");
+                code.push_str(&format!("impl {} {{\n", name));
+                code.push_str(PARSE_PREFIX_METHOD);
                 code.push_str("}\n\n");
                 let mut impl_body = String::new();
                 if !const_fields.is_empty() {
@@ -1455,10 +1466,9 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         group_snake, group_struct
     ));
     code.push_str(&format!(
-        "    let (header, payload) = Ref::<_, {}>::from_prefix(buf).ok()?;\n",
+        "    let (header, payload) = {}::parse_prefix(buf)?;\n",
         g.dimension_type
     ));
-    code.push_str("    let header = Ref::into_ref(header);\n");
     code.push_str(&format!(
         "    let header_block_len = {};\n",
         to_usize_expr(&format!("header.{}", dim.block_field), &dim.block_field_ty)
@@ -1566,6 +1576,9 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     }
     code.push_str(&format!("pub struct {} {{\n", entry_struct));
     write_fields_with_offsets(code, &g_fields, schema, opts);
+    code.push_str("}\n\n");
+    code.push_str(&format!("impl {} {{\n", entry_struct));
+    code.push_str(PARSE_PREFIX_METHOD);
     code.push_str("}\n\n");
     if !g_fields.is_empty() {
         code.push_str(&format!("impl {} {{\n", entry_struct));
@@ -1721,7 +1734,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
 
     if has_any_var {
         code.push_str(&format!(
-            "impl<'a> Iterator for {}<'a> {{\n    type Item = {}<'a>;\n    fn next(&mut self) -> Option<Self::Item> {{\n        if self.entries_left == 0 {{\n            return None;\n        }}\n        let blen = self.block_length;\n        if blen > self.remaining.len() {{\n            return None;\n        }}\n        let (entry, mut tail) = self.remaining.split_at(blen);\n        let (body, _) = Ref::<_, {}>::from_prefix(entry).ok()?;\n",
+            "impl<'a> Iterator for {}<'a> {{\n    type Item = {}<'a>;\n    fn next(&mut self) -> Option<Self::Item> {{\n        if self.entries_left == 0 {{\n            return None;\n        }}\n        let blen = self.block_length;\n        if blen > self.remaining.len() {{\n            return None;\n        }}\n        let (entry, mut tail) = self.remaining.split_at(blen);\n        let (body, _) = {}::parse_prefix(entry)?;\n",
             iter_name, entry_view, entry_struct
         ));
         let mut data_idx = 0;
@@ -1752,7 +1765,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         code.push_str(
             "        self.remaining = tail;\n        self.entries_left -= 1;\n        Some(",
         );
-        code.push_str(&format!("{} {{ body: Ref::into_ref(body)", entry_view));
+        code.push_str(&format!("{} {{ body", entry_view));
         data_idx = 0;
         for member in &g.members {
             match member {
@@ -1778,13 +1791,13 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
             "    fn next(&mut self) -> Option<Self::Item> {\n        if self.entries_left == 0 {\n            return None;\n        }\n        let blen = self.block_length;\n        if blen > self.remaining.len() {\n            return None;\n        }\n",
         );
         code.push_str(&format!(
-            "        let (entry, tail) = self.remaining.split_at(blen);\n        let (body, _) = Ref::<_, {}>::from_prefix(entry).ok()?;\n",
+            "        let (entry, tail) = self.remaining.split_at(blen);\n        let (body, _) = {}::parse_prefix(entry)?;\n",
             entry_struct
         ));
         code.push_str(
             "        self.remaining = tail;\n        self.entries_left -= 1;\n        Some(",
         );
-        code.push_str(&format!("{} {{ body: Ref::into_ref(body) }}", entry_view));
+        code.push_str(&format!("{} {{ body }}", entry_view));
         code.push_str(")\n    }\n}\n\n");
     }
 

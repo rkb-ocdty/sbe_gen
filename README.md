@@ -68,6 +68,9 @@ run it directly:
 cargo run --bin sbe_gen -- -i path/to/my-schema.xml -o src/sbe
 ```
 
+For a more complete guide with end-to-end examples (fixed-size and
+variable-size messages), see [docs/USAGE.md](docs/USAGE.md).
+
 This will create a module in `src/sbe` containing one Rust file per
 message defined in the schema.  Each file starts with common
 imports and includes a `parse_prefix` helper on each message type.  For example, given a
