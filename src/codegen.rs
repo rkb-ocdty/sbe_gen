@@ -1069,12 +1069,12 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
         ));
     }
     for g in &groups {
-        let builder_ty = format!("{}GroupBuilder", g.name);
+        let encoder_ty = format!("{}GroupEncoder", g.name);
         let gname = g.name.to_snake_case();
         code.push_str(&format!(
-            "    pub fn {name}<F>(&mut self, _f: F) -> Result<&mut Self, EncodeIntoError>\n    where\n        F: FnOnce(&mut {builder}<'_>),\n    {{\n        Err(EncodeIntoError::InvalidState(\"borrowed encoder does not support group encoding; use owned builder\"))\n    }}\n",
+            "    pub fn {name}<F>(&mut self, f: F) -> Result<&mut Self, EncodeIntoError>\n    where\n        F: FnOnce(&mut {encoder}<'_>) -> Result<(), EncodeIntoError>,\n    {{\n        let mut encoder = {encoder}::new(self.buf, self.used)?;\n        f(&mut encoder)?;\n        self.used = encoder.finish()?;\n        Ok(self)\n    }}\n",
             name = gname,
-            builder = builder_ty
+            encoder = encoder_ty
         ));
     }
     code.push_str("    pub fn finish(self) -> usize {\n        self.used\n    }\n");
@@ -1557,8 +1557,17 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     let iter_name = format!("{}Iter", group_name);
     let group_builder = format!("{}GroupBuilder", group_name);
     let entry_builder = format!("{}EntryBuilder", group_name);
+    let group_encoder = format!("{}GroupEncoder", group_name);
+    let entry_encoder = format!("{}EntryEncoder", group_name);
     let g_fields = group_fields(g);
     let entry_layout = layout_fields(&g_fields, schema, opts);
+    let entry_fixed_required = g_block_length.max(
+        entry_layout
+            .iter()
+            .map(|layout| layout.offset + layout.size)
+            .max()
+            .unwrap_or(0),
+    );
     let g_data = group_data(g);
     let g_nested = group_groups(g);
     let has_data = !g_data.is_empty();
@@ -1849,6 +1858,140 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
             kind = kind
         ));
     }
+    code.push_str("}\n\n");
+    code.push_str(&format!(
+        "pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    cursor: usize,\n    header_start: usize,\n    count: usize,\n}}\n\n",
+        group_encoder
+    ));
+    code.push_str(&format!(
+        "pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    cursor: usize,\n    start: usize,\n}}\n\n",
+        entry_encoder
+    ));
+    code.push_str(&format!("impl<'a> {}<'a> {{\n", group_encoder));
+    code.push_str(&format!(
+        "    pub const BLOCK_LENGTH: u16 = {};\n",
+        g_block_length
+    ));
+    code.push_str(&format!(
+        "    pub const HEADER_SIZE: usize = {};\n",
+        dim_size
+    ));
+    code.push_str(&format!(
+        "    pub const ENTRY_FIXED_LEN: usize = {};\n",
+        entry_fixed_required
+    ));
+    code.push_str(&format!(
+        "    pub fn new(buf: &'a mut [u8], cursor: usize) -> Result<Self, EncodeIntoError> {{\n        let header_end = cursor.checked_add(Self::HEADER_SIZE).ok_or(EncodeIntoError::InvalidState(\"group header offset overflow\"))?;\n        if header_end > buf.len() {{\n            return Err(EncodeIntoError::BufferTooSmall {{ required: header_end, available: buf.len() }});\n        }}\n        if header_end > cursor {{\n            buf[cursor..header_end].fill(0);\n        }}\n        let block_len = {block_expr};\n        write_bytes_into(buf, cursor + {block_off}, &block_len)?;\n        let count = {count_expr};\n        write_bytes_into(buf, cursor + {count_off}, &count)?;\n        Ok(Self {{ buf, cursor: header_end, header_start: cursor, count: 0 }})\n    }}\n",
+        block_expr = block_expr,
+        block_off = dim_block_offset,
+        count_expr = count_expr,
+        count_off = dim_count_offset
+    ));
+    code.push_str(&format!(
+        "    pub fn entry<F>(&mut self, f: F) -> Result<&mut Self, EncodeIntoError>\n    where\n        F: FnOnce(&mut {entry_encoder}<'_>) -> Result<(), EncodeIntoError>,\n    {{\n        let mut entry = {entry_encoder}::new(self.buf, self.cursor)?;\n        f(&mut entry)?;\n        self.cursor = entry.finish();\n        self.count = self.count.checked_add(1).ok_or(EncodeIntoError::InvalidState(\"group entry count overflow\"))?;\n        Ok(self)\n    }}\n",
+        entry_encoder = entry_encoder
+    ));
+    code.push_str(&format!(
+        "    pub fn finish(self) -> Result<usize, EncodeIntoError> {{\n        let count = {count_expr};\n        write_bytes_into(self.buf, self.header_start + {count_off}, &count)?;\n        Ok(self.cursor)\n    }}\n",
+        count_expr = count_finish_expr,
+        count_off = dim_count_offset
+    ));
+    code.push_str("}\n\n");
+    code.push_str(&format!("impl<'a> {}<'a> {{\n", entry_encoder));
+    code.push_str(&format!(
+        "    pub fn new(buf: &'a mut [u8], cursor: usize) -> Result<Self, EncodeIntoError> {{\n        let start = cursor;\n        let end = start.checked_add({entry_fixed_len}).ok_or(EncodeIntoError::InvalidState(\"group entry offset overflow\"))?;\n        if end > buf.len() {{\n            return Err(EncodeIntoError::BufferTooSmall {{ required: end, available: buf.len() }});\n        }}\n        if end > start {{\n            buf[start..end].fill(0);\n        }}\n        Ok(Self {{ buf, cursor: end, start }})\n    }}\n",
+        entry_fixed_len = entry_fixed_required
+    ));
+    for layout in &entry_layout {
+        let field = layout.field;
+        if field_is_constant(field, schema) {
+            continue;
+        }
+        let offset = layout.offset;
+        if let Some(resolved_type) =
+            resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+        {
+            let param_ty = builder_param_type(&resolved_type);
+            let encoded_expr = builder_value_expr("value", &resolved_type);
+            let needs_checks = field.min_value.is_some()
+                || field.max_value.is_some()
+                || (field.presence.as_deref() != Some("optional") && field.null_value.is_some());
+            if needs_checks {
+                if let (Some(host_ty), Some(raw_expr)) = (
+                    host_type_for_field(field, schema),
+                    raw_expr_for_value(field, "value", schema, opts),
+                ) {
+                    code.push_str(&format!("    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let raw: {host} = {raw};\n", name = field.name.to_snake_case(), param = param_ty, host = host_ty, raw = raw_expr));
+                    if let Some(ref minv) = field.min_value {
+                        code.push_str(&format!(
+                            "        let min: {host} = \"{minv}\".parse().expect(\"minValue parse\");\n        assert!(raw >= min, \"{field} below minValue\");\n",
+                            host = host_ty,
+                            minv = minv,
+                            field = field.name
+                        ));
+                    }
+                    if let Some(ref maxv) = field.max_value {
+                        code.push_str(&format!(
+                            "        let max: {host} = \"{maxv}\".parse().expect(\"maxValue parse\");\n        assert!(raw <= max, \"{field} above maxValue\");\n",
+                            host = host_ty,
+                            maxv = maxv,
+                            field = field.name
+                        ));
+                    }
+                    if field.presence.as_deref() != Some("optional")
+                        && let Some(ref nullv) = field.null_value
+                    {
+                        code.push_str(&format!(
+                                "        let null_val: {host} = \"{nullv}\".parse().expect(\"nullValue parse\");\n        assert!(raw != null_val, \"{field} uses nullValue but field is required\");\n",
+                                host = host_ty,
+                                nullv = nullv,
+                                field = field.name
+                            ));
+                    }
+                    code.push_str(&format!(
+                        "        let encoded = {expr};\n        write_bytes_into(self.buf, self.start + {offset}usize, &encoded).expect(\"group fixed field write in bounds\");\n        self\n    }}\n",
+                        expr = encoded_expr,
+                        offset = offset
+                    ));
+                } else {
+                    code.push_str(&format!(
+                        "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_into(self.buf, self.start + {offset}usize, &encoded).expect(\"group fixed field write in bounds\");\n        self\n    }}\n",
+                        name = field.name.to_snake_case(),
+                        param = param_ty,
+                        expr = encoded_expr,
+                        offset = offset
+                    ));
+                }
+            } else {
+                code.push_str(&format!(
+                    "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_into(self.buf, self.start + {offset}usize, &encoded).expect(\"group fixed field write in bounds\");\n        self\n    }}\n",
+                    name = field.name.to_snake_case(),
+                    param = param_ty,
+                    expr = encoded_expr,
+                    offset = offset
+                ));
+            }
+        }
+    }
+    for nested in &g_nested {
+        let nested_encoder = format!("{}GroupEncoder", nested.name);
+        let name = nested.name.to_snake_case();
+        code.push_str(&format!(
+            "    pub fn {name}<F>(&mut self, f: F) -> Result<&mut Self, EncodeIntoError>\n    where\n        F: FnOnce(&mut {encoder}<'_>) -> Result<(), EncodeIntoError>,\n    {{\n        let mut encoder = {encoder}::new(self.buf, self.cursor)?;\n        f(&mut encoder)?;\n        self.cursor = encoder.finish()?;\n        Ok(self)\n    }}\n",
+            name = name,
+            encoder = nested_encoder
+        ));
+    }
+    for d in &g_data {
+        let name = d.name.to_snake_case();
+        let kind = length_kind_token(length_kind_for_data(&d.ty, schema, opts));
+        code.push_str(&format!(
+            "    pub fn {name}(&mut self, bytes: &[u8]) -> Result<&mut Self, EncodeIntoError> {{\n        let written = write_var_data_into(self.buf, self.cursor, bytes, {kind}, ENDIAN)?;\n        self.cursor = self.cursor.checked_add(written).ok_or(EncodeIntoError::InvalidState(\"group var data length overflow\"))?;\n        Ok(self)\n    }}\n",
+            name = name,
+            kind = kind
+        ));
+    }
+    code.push_str("    pub fn finish(self) -> usize {\n        self.cursor\n    }\n");
     code.push_str("}\n\n");
 
     if has_any_var {

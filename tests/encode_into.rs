@@ -21,10 +21,12 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
         mod message_header;
         mod heartbeat;
         mod negotiate500;
+        mod trade;
 
         use heartbeat::*;
         use message_header::MessageHeader;
         use negotiate500::*;
+        use trade::*;
         use zerocopy::byteorder::little_endian::U16;
 
         fn main() {
@@ -104,6 +106,49 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
                 }
                 other => panic!("unexpected error: {:?}", other),
             }
+
+            // borrowed groups+var-data parity with owned builder framing
+            let mut trade_builder = TradeBuilder::new();
+            trade_builder.seq(9).price(555);
+            trade_builder.legs(|legs| {
+                legs.entry(|entry| {
+                    entry.qty(10).side(1);
+                    entry.note(b"bid").expect("note");
+                });
+                legs.entry(|entry| {
+                    entry.qty(20).side(2);
+                    entry.note(b"ask").expect("note");
+                });
+            });
+            trade_builder.comment(b"ok").expect("comment");
+            let owned_trade = trade_builder.finish_with_header();
+
+            let trade_header = MessageHeader {
+                block_length: U16::new(Trade::BLOCK_LENGTH),
+                template_id: U16::new(Trade::TEMPLATE_ID),
+                schema_id: U16::new(Trade::SCHEMA_ID),
+                version: U16::new(Trade::SCHEMA_VERSION),
+            };
+            let mut trade_dst = [0u8; 256];
+            let trade_len = Trade::encode_with_header_into(&mut trade_dst, trade_header, |enc| {
+                enc.seq(9).price(555);
+                enc.legs(|legs| {
+                    legs.entry(|entry| {
+                        entry.qty(10).side(1);
+                        entry.note(b"bid")?;
+                        Ok(())
+                    })?;
+                    legs.entry(|entry| {
+                        entry.qty(20).side(2);
+                        entry.note(b"ask")?;
+                        Ok(())
+                    })?;
+                    Ok(())
+                })?;
+                enc.comment(b"ok")?;
+                Ok(())
+            }).expect("trade encode");
+            assert_eq!(&trade_dst[..trade_len], owned_trade.as_slice());
         }
     "#;
     fs::write(src_dir.join("main.rs"), main_rs).expect("write main");
@@ -124,6 +169,10 @@ fn encode_into_roundtrip_and_parity() {
     let xml = r#"
         <messageSchema package="test" schemaId="1" version="1">
             <types>
+                <composite name="groupSize">
+                    <type name="blockLength" primitiveType="uint16"/>
+                    <type name="numInGroup" primitiveType="uint16"/>
+                </composite>
                 <type name="varStringEncoding" primitiveType="uint8"/>
                 <type name="ClientFlowType" presence="constant" length="10" primitiveType="char">IDEMPOTENT</type>
             </types>
@@ -136,6 +185,16 @@ fn encode_into_roundtrip_and_parity() {
                 <field name="seq" id="2" type="uint32" offset="0"/>
                 <field name="firm" id="3" type="uint64" offset="4"/>
                 <data name="credentials" id="4" type="varStringEncoding"/>
+            </message>
+            <message name="Trade" id="2" blockLength="12">
+                <field name="seq" id="1" type="uint32" offset="0"/>
+                <field name="price" id="2" type="int64" offset="4"/>
+                <group name="Legs" id="3" blockLength="5" dimensionType="groupSize">
+                    <field name="qty" id="1" type="int32" offset="0"/>
+                    <field name="side" id="2" type="uint8" offset="4"/>
+                    <data name="note" id="3" type="varStringEncoding"/>
+                </group>
+                <data name="comment" id="4" type="varStringEncoding"/>
             </message>
         </messageSchema>
     "#;

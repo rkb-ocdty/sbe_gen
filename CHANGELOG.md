@@ -11,6 +11,7 @@
 
 ### Added
 - Generated message modules now include a zero-allocation borrowed encoder (`<Message>Encoder<'a>`) that writes fixed fields and var-data directly into caller-provided `&mut [u8]`.
+- Borrowed encoding now includes generated group entry encoders (`<Group>GroupEncoder<'a>` / `<Group>EntryEncoder<'a>`) so nested groups can be encoded without heap allocation.
 - Added `encode_body_into` and `encode_with_header_into` helpers on each generated message for allocation-free body and framed encoding.
 - Added `EncodeIntoError` with explicit buffer-capacity and var-data length-overflow reporting for borrowed encoding paths.
 

@@ -227,6 +227,7 @@ fn generates_borrowed_encode_into_api() {
     assert!(msg_rs.contains("pub enum EncodeIntoError"));
     assert!(msg_rs.contains("pub fn encode_body_into"));
     assert!(msg_rs.contains("pub fn encode_with_header_into"));
+    assert!(!msg_rs.contains("does not support group encoding"));
 }
 
 #[test]
