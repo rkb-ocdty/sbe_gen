@@ -310,7 +310,7 @@ fn template_30_builder_roundtrip() {
             .asset(msg.asset)
             .security_id(msg.security_id)
             .trade_date(msg.trade_date);
-        let mut out = builder.finish().to_vec();
+        let mut out = builder.finish();
 
         set_u8(
             &mut out,
@@ -363,7 +363,7 @@ fn template_47_builder_roundtrip() {
                 }
             });
 
-        let mut out = builder.finish().to_vec();
+        let mut out = builder.finish();
         set_u8(
             &mut out,
             inc_book::MDIncrementalRefreshOrderBook47::MATCHEVENTINDICATOR_OFFSET as usize,
@@ -434,7 +434,7 @@ fn template_48_builder_roundtrip() {
                 }
             });
 
-        let mut out = builder.finish().to_vec();
+        let mut out = builder.finish();
         set_u8(
             &mut out,
             trade_summary::MDIncrementalRefreshTradeSummary48::MATCHEVENTINDICATOR_OFFSET as usize,
@@ -493,7 +493,7 @@ fn template_51_builder_roundtrip() {
                 }
             });
 
-        let mut out = builder.finish().to_vec();
+        let mut out = builder.finish();
         set_u8(
             &mut out,
             session_stats::MDIncrementalRefreshSessionStatistics51::MATCHEVENTINDICATOR_OFFSET

@@ -202,3 +202,52 @@ fn byte_order_override_applies_to_type_aliases() {
         .expect("alias_endian.rs emitted");
     assert!(alias_rs.contains("pub price: zerocopy::byteorder::big_endian::U16"));
 }
+
+#[test]
+fn generates_borrowed_encode_into_api() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <type name="varStringEncoding" primitiveType="uint8"/>
+            </types>
+            <message name="Negotiate500" id="500" blockLength="12">
+                <field name="seq" id="1" type="uint32" offset="0" />
+                <field name="firm" id="2" type="uint64" offset="4" />
+                <data name="credentials" id="3" type="varStringEncoding" />
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let msg_rs = module_map
+        .get("negotiate500.rs")
+        .expect("negotiate500.rs emitted");
+    assert!(msg_rs.contains("pub struct Negotiate500Encoder<'a>"));
+    assert!(msg_rs.contains("pub enum EncodeIntoError"));
+    assert!(msg_rs.contains("pub fn encode_body_into"));
+    assert!(msg_rs.contains("pub fn encode_with_header_into"));
+}
+
+#[test]
+fn constant_fields_are_not_writable_in_builder_or_encoder() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <type name="ClientFlowType" presence="constant" length="10" primitiveType="char">IDEMPOTENT</type>
+            </types>
+            <message name="Establish503" id="503" blockLength="4">
+                <field name="CustomerFlow" id="1" type="ClientFlowType"/>
+                <field name="seq" id="2" type="uint32" offset="0" />
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let msg_rs = module_map
+        .get("establish503.rs")
+        .expect("establish503.rs emitted");
+    assert!(!msg_rs.contains("pub fn customer_flow("));
+    assert!(msg_rs.contains("pub const CUSTOMER_FLOW: ClientFlowType"));
+}

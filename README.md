@@ -291,12 +291,17 @@ builder.levels(|levels| {
 builder.raw(b"payload").expect("raw");
 
 // Emit the message framed with the standard SBE header
-let framed = builder.finish_with_header(); // &[u8]
+let framed = builder.finish_with_header(); // Vec<u8>
 // or if you only need the body:
-// let body = builder.finish(); // &[u8]
+// let body = builder.finish(); // Vec<u8>
 
-// The slices borrow the builder's buffer. Clone with `.to_vec()` for an owned copy
-// or keep using the builder (call `builder.clear()` to reset it).
+// Zero-allocation path for hot loops:
+let mut dst = [0u8; 256];
+let written = Book::encode_body_into(&mut dst, |enc| {
+    enc.seq(123);
+    enc.raw(b"payload")?;
+    Ok(())
+})?;
 ```
 
 ## CME MDP3 pcap dump example

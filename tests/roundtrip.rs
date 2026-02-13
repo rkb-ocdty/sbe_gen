@@ -44,7 +44,7 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
             builder.comment(b"ok").expect("comment");
 
             let framed = builder.finish_with_header();
-            let (hdr, body) = MessageHeader::parse_prefix(framed).expect("header");
+            let (hdr, body) = MessageHeader::parse_prefix(&framed).expect("header");
             assert_eq!(hdr.template_id.get(), Trade::TEMPLATE_ID);
 
             let (view, after_fixed) = parse_with_header(body, hdr).expect("view");

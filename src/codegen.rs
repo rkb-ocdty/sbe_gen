@@ -706,6 +706,9 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         code.push_str("use core::str;\n\n");
     }
     code.push_str(&format!("const ENDIAN: &str = \"{}\";\n\n", opts.endian));
+    code.push_str(
+        "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum EncodeIntoError {\n    BufferTooSmall { required: usize, available: usize },\n    LengthOverflow { len: usize, max: usize },\n    InvalidState(&'static str),\n}\n\n",
+    );
     if has_var_data {
         code.push_str("#[derive(Debug, Clone, Copy)]\n");
         code.push_str(
@@ -724,12 +727,17 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         code.push_str("fn parse_var_data<'a>(buf: &'a [u8], kind: LengthKind) -> Option<(VarData<'a>, &'a [u8])> {\n    let (len, rest) = read_length(kind, buf)?;\n    if rest.len() < len { return None; }\n    let (bytes, tail) = rest.split_at(len);\n    Some((VarData { len, bytes }, tail))\n}\n\n");
         code.push_str("fn write_length(buf: &mut Vec<u8>, len: usize, kind: LengthKind, endian: &str) -> Result<(), EncodeError> {\n    let max = length_max(kind);\n    if len > max { return Err(EncodeError { len, max }); }\n    match kind {\n        LengthKind::U8 => buf.push(len as u8),\n        LengthKind::U16 => {\n            let v = len as u16;\n            if endian == \"big\" { buf.extend_from_slice(&v.to_be_bytes()); } else { buf.extend_from_slice(&v.to_le_bytes()); }\n        }\n        LengthKind::U32 => {\n            let v = len as u32;\n            if endian == \"big\" { buf.extend_from_slice(&v.to_be_bytes()); } else { buf.extend_from_slice(&v.to_le_bytes()); }\n        }\n        LengthKind::U64 => {\n            let v = len as u64;\n            if endian == \"big\" { buf.extend_from_slice(&v.to_be_bytes()); } else { buf.extend_from_slice(&v.to_le_bytes()); }\n        }\n    }\n    Ok(())\n}\n\n");
         code.push_str("fn write_var_data(buf: &mut Vec<u8>, bytes: &[u8], kind: LengthKind, endian: &str) -> Result<(), EncodeError> {\n    write_length(buf, bytes.len(), kind, endian)?;\n    buf.extend_from_slice(bytes);\n    Ok(())\n}\n\n");
+        code.push_str("fn write_length_into(dst: &mut [u8], offset: usize, len: usize, kind: LengthKind, endian: &str) -> Result<usize, EncodeIntoError> {\n    let max = length_max(kind);\n    if len > max { return Err(EncodeIntoError::LengthOverflow { len, max }); }\n    match kind {\n        LengthKind::U8 => {\n            let end = offset.checked_add(1).ok_or(EncodeIntoError::InvalidState(\"length offset overflow\"))?;\n            if end > dst.len() { return Err(EncodeIntoError::BufferTooSmall { required: end, available: dst.len() }); }\n            dst[offset] = len as u8;\n            Ok(1)\n        }\n        LengthKind::U16 => {\n            let end = offset.checked_add(2).ok_or(EncodeIntoError::InvalidState(\"length offset overflow\"))?;\n            if end > dst.len() { return Err(EncodeIntoError::BufferTooSmall { required: end, available: dst.len() }); }\n            let v = len as u16;\n            if endian == \"big\" { dst[offset..end].copy_from_slice(&v.to_be_bytes()); } else { dst[offset..end].copy_from_slice(&v.to_le_bytes()); }\n            Ok(2)\n        }\n        LengthKind::U32 => {\n            let end = offset.checked_add(4).ok_or(EncodeIntoError::InvalidState(\"length offset overflow\"))?;\n            if end > dst.len() { return Err(EncodeIntoError::BufferTooSmall { required: end, available: dst.len() }); }\n            let v = len as u32;\n            if endian == \"big\" { dst[offset..end].copy_from_slice(&v.to_be_bytes()); } else { dst[offset..end].copy_from_slice(&v.to_le_bytes()); }\n            Ok(4)\n        }\n        LengthKind::U64 => {\n            let end = offset.checked_add(8).ok_or(EncodeIntoError::InvalidState(\"length offset overflow\"))?;\n            if end > dst.len() { return Err(EncodeIntoError::BufferTooSmall { required: end, available: dst.len() }); }\n            let v = len as u64;\n            if endian == \"big\" { dst[offset..end].copy_from_slice(&v.to_be_bytes()); } else { dst[offset..end].copy_from_slice(&v.to_le_bytes()); }\n            Ok(8)\n        }\n    }\n}\n\n");
+        code.push_str("fn write_var_data_into(dst: &mut [u8], offset: usize, bytes: &[u8], kind: LengthKind, endian: &str) -> Result<usize, EncodeIntoError> {\n    let prefix = write_length_into(dst, offset, bytes.len(), kind, endian)?;\n    let data_start = offset.checked_add(prefix).ok_or(EncodeIntoError::InvalidState(\"var data offset overflow\"))?;\n    let data_end = data_start.checked_add(bytes.len()).ok_or(EncodeIntoError::InvalidState(\"var data length overflow\"))?;\n    if data_end > dst.len() { return Err(EncodeIntoError::BufferTooSmall { required: data_end, available: dst.len() }); }\n    dst[data_start..data_end].copy_from_slice(bytes);\n    Ok(prefix + bytes.len())\n}\n\n");
     }
     code.push_str(
         "fn ensure_len(buf: &mut Vec<u8>, len: usize) {\n    if buf.len() < len { buf.resize(len, 0); }\n}\n\n",
     );
     code.push_str(
         "fn write_bytes_at<T: IntoBytes + Immutable>(buf: &mut Vec<u8>, offset: usize, value: &T) {\n    let bytes = value.as_bytes();\n    ensure_len(buf, offset + bytes.len());\n    buf[offset..offset + bytes.len()].copy_from_slice(bytes);\n}\n\n",
+    );
+    code.push_str(
+        "fn write_bytes_into<T: IntoBytes + Immutable>(dst: &mut [u8], offset: usize, value: &T) -> Result<(), EncodeIntoError> {\n    let bytes = value.as_bytes();\n    let end = offset.checked_add(bytes.len()).ok_or(EncodeIntoError::InvalidState(\"fixed field offset overflow\"))?;\n    if end > dst.len() { return Err(EncodeIntoError::BufferTooSmall { required: end, available: dst.len() }); }\n    dst[offset..end].copy_from_slice(bytes);\n    Ok(())\n}\n\n",
     );
     // struct definition
     code.push_str("#[repr(C)]\n");
@@ -830,6 +838,14 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     }
     code.push_str("}\n\n");
     let builder_name = format!("{}Builder", msg.name);
+    let encoder_name = format!("{}Encoder", msg.name);
+    let fixed_required = msg_block_length.max(
+        field_layouts
+            .iter()
+            .map(|layout| layout.offset + layout.size)
+            .max()
+            .unwrap_or(0),
+    );
     code.push_str(&format!(
         "pub struct {} {{\n    buf: Vec<u8>,\n}}\n\n",
         builder_name
@@ -851,18 +867,12 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         "    pub const SCHEMA_VERSION: u16 = {}::SCHEMA_VERSION;\n",
         msg.name
     ));
-    code.push_str("    pub const HEADER_LEN: usize = core::mem::size_of::<MessageHeader>();\n");
-    code.push_str("    pub const BODY_OFFSET: usize = Self::HEADER_LEN;\n");
     code.push_str(
-        "    pub fn new() -> Self {\n        Self { buf: vec![0u8; Self::HEADER_LEN + Self::BLOCK_LENGTH as usize] }\n    }\n",
+        "    pub fn new() -> Self {\n        Self { buf: vec![0u8; Self::BLOCK_LENGTH as usize] }\n    }\n",
     );
     code.push_str(
-        "    pub fn with_capacity(capacity: usize) -> Self {\n        let mut buf = Vec::with_capacity(Self::HEADER_LEN + Self::BLOCK_LENGTH as usize + capacity);\n        buf.resize(Self::HEADER_LEN + Self::BLOCK_LENGTH as usize, 0);\n        Self { buf }\n    }\n",
+        "    pub fn with_capacity(capacity: usize) -> Self {\n        let mut buf = vec![0u8; Self::BLOCK_LENGTH as usize];\n        buf.reserve(capacity);\n        Self { buf }\n    }\n",
     );
-    code.push_str(
-        "    pub fn clear(&mut self) {\n        self.buf.clear();\n        self.buf.resize(Self::HEADER_LEN + Self::BLOCK_LENGTH as usize, 0);\n    }\n",
-    );
-    code.push_str("    pub fn reserve(&mut self, additional: usize) {\n        self.buf.reserve(additional);\n    }\n");
     for layout in &field_layouts {
         let field = layout.field;
         if field_is_constant(field, schema) {
@@ -911,13 +921,13 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
                             ));
                     }
                     code.push_str(&format!(
-                        "        let encoded = {expr};\n        write_bytes_at(&mut self.buf, Self::BODY_OFFSET + {offset}usize, &encoded);\n        self\n    }}\n",
+                        "        let encoded = {expr};\n        write_bytes_at(&mut self.buf, {offset}usize, &encoded);\n        self\n    }}\n",
                         expr = encoded_expr,
                         offset = offset
                     ));
                 } else {
                     code.push_str(&format!(
-                        "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_at(&mut self.buf, Self::BODY_OFFSET + {offset}usize, &encoded);\n        self\n    }}\n",
+                        "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_at(&mut self.buf, {offset}usize, &encoded);\n        self\n    }}\n",
                         name = field_name,
                         param = param_ty,
                         expr = encoded_expr,
@@ -926,7 +936,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
                 }
             } else {
                 code.push_str(&format!(
-                    "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_at(&mut self.buf, Self::BODY_OFFSET + {offset}usize, &encoded);\n        self\n    }}\n",
+                    "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_at(&mut self.buf, {offset}usize, &encoded);\n        self\n    }}\n",
                     name = field_name,
                     param = param_ty,
                     expr = encoded_expr,
@@ -953,12 +963,131 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
             kind = kind
         ));
     }
+    code.push_str("    pub fn finish(self) -> Vec<u8> {\n        self.buf\n    }\n");
     code.push_str(
-        "    pub fn finish(&self) -> &[u8] {\n        &self.buf[Self::BODY_OFFSET..]\n    }\n",
+        "    pub fn finish_with_header(self) -> Vec<u8> {\n        let mut out = Vec::with_capacity(self.buf.len() + core::mem::size_of::<MessageHeader>());\n        let header = MessageHeader {\n            block_length: U16::new(Self::BLOCK_LENGTH),\n            template_id: U16::new(Self::TEMPLATE_ID),\n            schema_id: U16::new(Self::SCHEMA_ID),\n            version: U16::new(Self::SCHEMA_VERSION),\n        };\n        out.extend_from_slice(header.as_bytes());\n        out.extend_from_slice(&self.buf);\n        out\n    }\n",
     );
+    code.push_str("}\n\n");
+    code.push_str(&format!(
+        "/// Zero-allocation encoder writing directly into caller-provided memory.\n\
+pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
+        encoder_name
+    ));
+    code.push_str(&format!("impl<'a> {}<'a> {{\n", encoder_name));
+    code.push_str(&format!(
+        "    pub const BLOCK_LENGTH: u16 = {}::BLOCK_LENGTH;\n",
+        msg.name
+    ));
+    code.push_str(&format!(
+        "    pub const FIXED_LEN: usize = {};\n",
+        fixed_required
+    ));
     code.push_str(
-        "    pub fn finish_with_header(&mut self) -> &[u8] {\n        let header = MessageHeader {\n            block_length: U16::new(Self::BLOCK_LENGTH),\n            template_id: U16::new(Self::TEMPLATE_ID),\n            schema_id: U16::new(Self::SCHEMA_ID),\n            version: U16::new(Self::SCHEMA_VERSION),\n        };\n        write_bytes_at(&mut self.buf, 0, &header);\n        &self.buf[..]\n    }\n",
+        "    /// Create an encoder over `buf`.\n    ///\n    /// The slice must have at least `FIXED_LEN` bytes. The fixed block is zero-initialized,\n    /// and variable-size fields append after the fixed block.\n    pub fn new(buf: &'a mut [u8]) -> Result<Self, EncodeIntoError> {\n        if buf.len() < Self::FIXED_LEN {\n            return Err(EncodeIntoError::BufferTooSmall { required: Self::FIXED_LEN, available: buf.len() });\n        }\n        buf[..Self::FIXED_LEN].fill(0);\n        Ok(Self { buf, used: Self::FIXED_LEN })\n    }\n",
     );
+    code.push_str("    pub fn encoded_len(&self) -> usize {\n        self.used\n    }\n");
+    code.push_str("    pub fn as_slice(&self) -> &[u8] {\n        &self.buf[..self.used]\n    }\n");
+    for layout in &field_layouts {
+        let field = layout.field;
+        if field_is_constant(field, schema) {
+            continue;
+        }
+        let offset = layout.offset;
+        let field_name = field.name.to_snake_case();
+        if let Some(resolved_type) =
+            resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+        {
+            let param_ty = builder_param_type(&resolved_type);
+            let encoded_expr = builder_value_expr("value", &resolved_type);
+            let needs_checks = field.min_value.is_some()
+                || field.max_value.is_some()
+                || (field.presence.as_deref() != Some("optional") && field.null_value.is_some());
+            if needs_checks {
+                if let (Some(host_ty), Some(raw_expr)) = (
+                    host_type_for_field(field, schema),
+                    raw_expr_for_value(field, "value", schema, opts),
+                ) {
+                    code.push_str(&format!("    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let raw: {host} = {raw};\n", name = field_name, param = param_ty, host = host_ty, raw = raw_expr));
+                    if let Some(ref minv) = field.min_value {
+                        code.push_str(&format!(
+                            "        let min: {host} = \"{minv}\".parse().expect(\"minValue parse\");\n        assert!(raw >= min, \"{field} below minValue\");\n",
+                            host = host_ty,
+                            minv = minv,
+                            field = field.name
+                        ));
+                    }
+                    if let Some(ref maxv) = field.max_value {
+                        code.push_str(&format!(
+                            "        let max: {host} = \"{maxv}\".parse().expect(\"maxValue parse\");\n        assert!(raw <= max, \"{field} above maxValue\");\n",
+                            host = host_ty,
+                            maxv = maxv,
+                            field = field.name
+                        ));
+                    }
+                    if field.presence.as_deref() != Some("optional")
+                        && let Some(ref nullv) = field.null_value
+                    {
+                        code.push_str(&format!(
+                                "        let null_val: {host} = \"{nullv}\".parse().expect(\"nullValue parse\");\n        assert!(raw != null_val, \"{field} uses nullValue but field is required\");\n",
+                                host = host_ty,
+                                nullv = nullv,
+                                field = field.name
+                            ));
+                    }
+                    code.push_str(&format!(
+                        "        let encoded = {expr};\n        write_bytes_into(self.buf, {offset}usize, &encoded).expect(\"fixed field write in bounds\");\n        self\n    }}\n",
+                        expr = encoded_expr,
+                        offset = offset
+                    ));
+                } else {
+                    code.push_str(&format!(
+                        "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_into(self.buf, {offset}usize, &encoded).expect(\"fixed field write in bounds\");\n        self\n    }}\n",
+                        name = field_name,
+                        param = param_ty,
+                        expr = encoded_expr,
+                        offset = offset
+                    ));
+                }
+            } else {
+                code.push_str(&format!(
+                    "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_into(self.buf, {offset}usize, &encoded).expect(\"fixed field write in bounds\");\n        self\n    }}\n",
+                    name = field_name,
+                    param = param_ty,
+                    expr = encoded_expr,
+                    offset = offset
+                ));
+            }
+        }
+    }
+    for d in &data_fields {
+        let name = d.name.to_snake_case();
+        let kind = length_kind_token(length_kind_for_data(&d.ty, schema, opts));
+        code.push_str(&format!(
+            "    pub fn {name}(&mut self, bytes: &[u8]) -> Result<&mut Self, EncodeIntoError> {{\n        let written = write_var_data_into(self.buf, self.used, bytes, {kind}, ENDIAN)?;\n        self.used = self.used.checked_add(written).ok_or(EncodeIntoError::InvalidState(\"encoded length overflow\"))?;\n        Ok(self)\n    }}\n",
+            name = name,
+            kind = kind
+        ));
+    }
+    for g in &groups {
+        let builder_ty = format!("{}GroupBuilder", g.name);
+        let gname = g.name.to_snake_case();
+        code.push_str(&format!(
+            "    pub fn {name}<F>(&mut self, _f: F) -> Result<&mut Self, EncodeIntoError>\n    where\n        F: FnOnce(&mut {builder}<'_>),\n    {{\n        Err(EncodeIntoError::InvalidState(\"borrowed encoder does not support group encoding; use owned builder\"))\n    }}\n",
+            name = gname,
+            builder = builder_ty
+        ));
+    }
+    code.push_str("    pub fn finish(self) -> usize {\n        self.used\n    }\n");
+    code.push_str("}\n\n");
+    code.push_str(&format!("impl {} {{\n", msg.name));
+    code.push_str(&format!(
+        "    /// Encode message body (fixed block + variable data) into `dst` without allocation.\n    ///\n    /// Returns number of body bytes written.\n    pub fn encode_body_into<F>(dst: &mut [u8], f: F) -> Result<usize, EncodeIntoError>\n    where\n        F: FnOnce(&mut {encoder}<'_>) -> Result<(), EncodeIntoError>,\n    {{\n        let mut encoder = {encoder}::new(dst)?;\n        f(&mut encoder)?;\n        Ok(encoder.finish())\n    }}\n",
+        encoder = encoder_name
+    ));
+    code.push_str(&format!(
+        "    /// Encode header + body into `dst` without allocation.\n    ///\n    /// `dst` must fit `size_of::<MessageHeader>() + body_len`. Returns total bytes written.\n    pub fn encode_with_header_into<F>(dst: &mut [u8], header: MessageHeader, f: F) -> Result<usize, EncodeIntoError>\n    where\n        F: FnOnce(&mut {encoder}<'_>) -> Result<(), EncodeIntoError>,\n    {{\n        let header_len = core::mem::size_of::<MessageHeader>();\n        if dst.len() < header_len {{\n            return Err(EncodeIntoError::BufferTooSmall {{ required: header_len, available: dst.len() }});\n        }}\n        let body_len = {{\n            let (_, body_dst) = dst.split_at_mut(header_len);\n            let mut encoder = {encoder}::new(body_dst)?;\n            f(&mut encoder)?;\n            encoder.finish()\n        }};\n        let total = header_len.checked_add(body_len).ok_or(EncodeIntoError::InvalidState(\"encoded frame length overflow\"))?;\n        if dst.len() < total {{\n            return Err(EncodeIntoError::BufferTooSmall {{ required: total, available: dst.len() }});\n        }}\n        write_bytes_into(dst, 0, &header)?;\n        Ok(total)\n    }}\n",
+        encoder = encoder_name
+    ));
     code.push_str("}\n\n");
     // group helpers (supports nesting)
     for g in groups {
