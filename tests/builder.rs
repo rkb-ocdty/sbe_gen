@@ -43,7 +43,7 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
             builder.comment(b"ok").expect("comment");
 
             let body = builder.finish();
-            let (msg, rest) = OrderBook::parse_prefix(&body).expect("parse header");
+            let (msg, rest) = OrderBook::parse_prefix(body).expect("parse header");
             assert_eq!(msg.seq.get(), 7);
             assert_eq!(msg.source.get(), 9);
 

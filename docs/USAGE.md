@@ -132,8 +132,10 @@ impl HeartbeatBuilder {
     pub fn new() -> Self { /* ... */ }
     pub fn seq(&mut self, value: u32) -> &mut Self { /* ... */ }
     pub fn sending_time(&mut self, value: u64) -> &mut Self { /* ... */ }
-    pub fn finish(self) -> Vec<u8> { /* ... */ }
-    pub fn finish_with_header(self) -> Vec<u8> { /* ... */ }
+    pub fn clear(&mut self) { /* ... */ }
+    pub fn reserve(&mut self, additional: usize) { /* ... */ }
+    pub fn finish(&self) -> &[u8] { /* ... */ }
+    pub fn finish_with_header(&mut self) -> &[u8] { /* ... */ }
 }
 ```
 
@@ -164,7 +166,12 @@ let mut builder = HeartbeatBuilder::new();
 builder.seq(42);
 builder.sending_time(1_700_000_000);
 
-let framed = builder.finish_with_header(); // or finish() for the body only
+let framed = builder.finish_with_header(); // &[u8], header + body
+// or if you only need the body:
+let body = builder.finish(); // &[u8]
+
+// Both slices borrow the builder's buffer; call `.to_vec()` to make a copy or hold onto the builder.
+// Reuse the builder by calling `builder.clear()` (optionally after `builder.reserve(additional)`).
 ```
 
 ## Variable-size message example (groups + data)
@@ -277,7 +284,10 @@ builder.levels(|levels| {
 });
 builder.raw(b"payload").expect("raw");
 
-let framed = builder.finish_with_header(); // or finish() for the body only
+let framed = builder.finish_with_header(); // &[u8], header + body
+let body = builder.finish(); // &[u8]
+
+// Clone if you need owned bytes or to keep them after dropping the builder.
 ```
 
 ## Header-aware decoding (acting version)

@@ -291,9 +291,12 @@ builder.levels(|levels| {
 builder.raw(b"payload").expect("raw");
 
 // Emit the message framed with the standard SBE header
-let framed = builder.finish_with_header();
+let framed = builder.finish_with_header(); // &[u8]
 // or if you only need the body:
-// let body = builder.finish();
+// let body = builder.finish(); // &[u8]
+
+// The slices borrow the builder's buffer. Clone with `.to_vec()` for an owned copy
+// or keep using the builder (call `builder.clear()` to reset it).
 ```
 
 ## CME MDP3 pcap dump example

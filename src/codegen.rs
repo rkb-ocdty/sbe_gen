@@ -851,14 +851,23 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         "    pub const SCHEMA_VERSION: u16 = {}::SCHEMA_VERSION;\n",
         msg.name
     ));
+    code.push_str("    pub const HEADER_LEN: usize = core::mem::size_of::<MessageHeader>();\n");
+    code.push_str("    pub const BODY_OFFSET: usize = Self::HEADER_LEN;\n");
     code.push_str(
-        "    pub fn new() -> Self {\n        Self { buf: vec![0u8; Self::BLOCK_LENGTH as usize] }\n    }\n",
+        "    pub fn new() -> Self {\n        Self { buf: vec![0u8; Self::HEADER_LEN + Self::BLOCK_LENGTH as usize] }\n    }\n",
     );
     code.push_str(
-        "    pub fn with_capacity(capacity: usize) -> Self {\n        let mut buf = vec![0u8; Self::BLOCK_LENGTH as usize];\n        buf.reserve(capacity);\n        Self { buf }\n    }\n",
+        "    pub fn with_capacity(capacity: usize) -> Self {\n        let mut buf = Vec::with_capacity(Self::HEADER_LEN + Self::BLOCK_LENGTH as usize + capacity);\n        buf.resize(Self::HEADER_LEN + Self::BLOCK_LENGTH as usize, 0);\n        Self { buf }\n    }\n",
     );
+    code.push_str(
+        "    pub fn clear(&mut self) {\n        self.buf.clear();\n        self.buf.resize(Self::HEADER_LEN + Self::BLOCK_LENGTH as usize, 0);\n    }\n",
+    );
+    code.push_str("    pub fn reserve(&mut self, additional: usize) {\n        self.buf.reserve(additional);\n    }\n");
     for layout in &field_layouts {
         let field = layout.field;
+        if field_is_constant(field, schema) {
+            continue;
+        }
         let offset = layout.offset;
         let field_name = field.name.to_snake_case();
         if let Some(resolved_type) =
@@ -902,13 +911,13 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
                             ));
                     }
                     code.push_str(&format!(
-                        "        let encoded = {expr};\n        write_bytes_at(&mut self.buf, {offset}usize, &encoded);\n        self\n    }}\n",
+                        "        let encoded = {expr};\n        write_bytes_at(&mut self.buf, Self::BODY_OFFSET + {offset}usize, &encoded);\n        self\n    }}\n",
                         expr = encoded_expr,
                         offset = offset
                     ));
                 } else {
                     code.push_str(&format!(
-                        "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_at(&mut self.buf, {offset}usize, &encoded);\n        self\n    }}\n",
+                        "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_at(&mut self.buf, Self::BODY_OFFSET + {offset}usize, &encoded);\n        self\n    }}\n",
                         name = field_name,
                         param = param_ty,
                         expr = encoded_expr,
@@ -917,7 +926,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
                 }
             } else {
                 code.push_str(&format!(
-                    "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_at(&mut self.buf, {offset}usize, &encoded);\n        self\n    }}\n",
+                    "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_at(&mut self.buf, Self::BODY_OFFSET + {offset}usize, &encoded);\n        self\n    }}\n",
                     name = field_name,
                     param = param_ty,
                     expr = encoded_expr,
@@ -944,9 +953,11 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
             kind = kind
         ));
     }
-    code.push_str("    pub fn finish(self) -> Vec<u8> {\n        self.buf\n    }\n");
     code.push_str(
-        "    pub fn finish_with_header(self) -> Vec<u8> {\n        let mut out = Vec::with_capacity(self.buf.len() + core::mem::size_of::<MessageHeader>());\n        let header = MessageHeader {\n            block_length: U16::new(Self::BLOCK_LENGTH),\n            template_id: U16::new(Self::TEMPLATE_ID),\n            schema_id: U16::new(Self::SCHEMA_ID),\n            version: U16::new(Self::SCHEMA_VERSION),\n        };\n        out.extend_from_slice(header.as_bytes());\n        out.extend_from_slice(&self.buf);\n        out\n    }\n",
+        "    pub fn finish(&self) -> &[u8] {\n        &self.buf[Self::BODY_OFFSET..]\n    }\n",
+    );
+    code.push_str(
+        "    pub fn finish_with_header(&mut self) -> &[u8] {\n        let header = MessageHeader {\n            block_length: U16::new(Self::BLOCK_LENGTH),\n            template_id: U16::new(Self::TEMPLATE_ID),\n            schema_id: U16::new(Self::SCHEMA_ID),\n            version: U16::new(Self::SCHEMA_VERSION),\n        };\n        write_bytes_at(&mut self.buf, 0, &header);\n        &self.buf[..]\n    }\n",
     );
     code.push_str("}\n\n");
     // group helpers (supports nesting)
@@ -1622,6 +1633,9 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     code.push_str(&format!("impl<'a> {}<'a> {{\n", entry_builder));
     for layout in &entry_layout {
         let field = layout.field;
+        if field_is_constant(field, schema) {
+            continue;
+        }
         let offset = layout.offset;
         if let Some(resolved_type) =
             resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
