@@ -146,8 +146,8 @@ fn dump_channel_reset(msg_hdr: &MessageHeader, body: &[u8]) {
             "    entry {} appl_id={} action={} entry_type={}",
             idx,
             entry.body.appl_id.get(),
-            entry.body.md_update_action.0,
-            entry.body.md_entry_type.0
+            channel_reset::NoMDEntriesEntry::MD_UPDATE_ACTION.0,
+            channel_reset::NoMDEntriesEntry::MD_ENTRY_TYPE.0
         );
     }
 }
@@ -250,7 +250,7 @@ fn dump_trade_summary(msg_hdr: &MessageHeader, body: &[u8]) {
             body.number_of_orders.get(),
             body.aggressor_side.0,
             body.md_update_action.0,
-            body.md_entry_type.0,
+            trade_summary::NoMDEntriesEntry::MD_ENTRY_TYPE.0,
             decode_u32_null(body.md_trade_entry_id.get())
         );
     }

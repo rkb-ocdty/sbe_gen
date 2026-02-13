@@ -714,10 +714,16 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         code.push_str("impl<'a> VarData<'a> {\n    pub fn as_str(&self) -> Option<&'a str> { str::from_utf8(self.bytes).ok() }\n}\n\n");
         code.push_str("#[derive(Clone, Copy)]\n");
         code.push_str("enum LengthKind { U8, U16, U32, U64 }\n\n");
+        code.push_str(
+            "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub struct EncodeError {\n    pub len: usize,\n    pub max: usize,\n}\n\n",
+        );
+        code.push_str(
+            "fn length_max(kind: LengthKind) -> usize {\n    match kind {\n        LengthKind::U8 => u8::MAX as usize,\n        LengthKind::U16 => u16::MAX as usize,\n        LengthKind::U32 => u32::MAX as usize,\n        LengthKind::U64 => u64::MAX as usize,\n    }\n}\n\n",
+        );
         code.push_str("fn read_length(kind: LengthKind, buf: &[u8]) -> Option<(usize, &[u8])> {\n    match kind {\n        LengthKind::U8 => {\n            let (&b, rest) = buf.split_first()?;\n            Some((b as usize, rest))\n        }\n        LengthKind::U16 => {\n            let (v, rest) = Ref::<_, U16>::from_prefix(buf).ok()?;\n            Some((v.get() as usize, rest))\n        }\n        LengthKind::U32 => {\n            let (v, rest) = Ref::<_, U32>::from_prefix(buf).ok()?;\n            Some((v.get() as usize, rest))\n        }\n        LengthKind::U64 => {\n            let (v, rest) = Ref::<_, U64>::from_prefix(buf).ok()?;\n            Some((v.get() as usize, rest))\n        }\n    }\n}\n\n");
         code.push_str("fn parse_var_data<'a>(buf: &'a [u8], kind: LengthKind) -> Option<(VarData<'a>, &'a [u8])> {\n    let (len, rest) = read_length(kind, buf)?;\n    if rest.len() < len { return None; }\n    let (bytes, tail) = rest.split_at(len);\n    Some((VarData { len, bytes }, tail))\n}\n\n");
-        code.push_str("fn write_length(buf: &mut Vec<u8>, len: usize, kind: LengthKind, endian: &str) {\n    match kind {\n        LengthKind::U8 => buf.push(len as u8),\n        LengthKind::U16 => {\n            let v = len as u16;\n            if endian == \"big\" { buf.extend_from_slice(&v.to_be_bytes()); } else { buf.extend_from_slice(&v.to_le_bytes()); }\n        }\n        LengthKind::U32 => {\n            let v = len as u32;\n            if endian == \"big\" { buf.extend_from_slice(&v.to_be_bytes()); } else { buf.extend_from_slice(&v.to_le_bytes()); }\n        }\n        LengthKind::U64 => {\n            let v = len as u64;\n            if endian == \"big\" { buf.extend_from_slice(&v.to_be_bytes()); } else { buf.extend_from_slice(&v.to_le_bytes()); }\n        }\n    }\n}\n\n");
-        code.push_str("fn write_var_data(buf: &mut Vec<u8>, bytes: &[u8], kind: LengthKind, endian: &str) {\n    write_length(buf, bytes.len(), kind, endian);\n    buf.extend_from_slice(bytes);\n}\n\n");
+        code.push_str("fn write_length(buf: &mut Vec<u8>, len: usize, kind: LengthKind, endian: &str) -> Result<(), EncodeError> {\n    let max = length_max(kind);\n    if len > max { return Err(EncodeError { len, max }); }\n    match kind {\n        LengthKind::U8 => buf.push(len as u8),\n        LengthKind::U16 => {\n            let v = len as u16;\n            if endian == \"big\" { buf.extend_from_slice(&v.to_be_bytes()); } else { buf.extend_from_slice(&v.to_le_bytes()); }\n        }\n        LengthKind::U32 => {\n            let v = len as u32;\n            if endian == \"big\" { buf.extend_from_slice(&v.to_be_bytes()); } else { buf.extend_from_slice(&v.to_le_bytes()); }\n        }\n        LengthKind::U64 => {\n            let v = len as u64;\n            if endian == \"big\" { buf.extend_from_slice(&v.to_be_bytes()); } else { buf.extend_from_slice(&v.to_le_bytes()); }\n        }\n    }\n    Ok(())\n}\n\n");
+        code.push_str("fn write_var_data(buf: &mut Vec<u8>, bytes: &[u8], kind: LengthKind, endian: &str) -> Result<(), EncodeError> {\n    write_length(buf, bytes.len(), kind, endian)?;\n    buf.extend_from_slice(bytes);\n    Ok(())\n}\n\n");
     }
     code.push_str(
         "fn ensure_len(buf: &mut Vec<u8>, len: usize) {\n    if buf.len() < len { buf.resize(len, 0); }\n}\n\n",
@@ -734,52 +740,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     write_fields_with_offsets(&mut code, &fields, schema, opts);
     code.push_str("}\n\n");
     // associated constants for constant fields
-    let const_fields: Vec<_> = fields
-        .iter()
-        .filter(|f| f.presence.as_deref() == Some("constant"))
-        .collect();
-    if !const_fields.is_empty() {
-        code.push_str(&format!("impl {} {{\n", msg.name));
-        for f in const_fields {
-            let field_name = f.name.to_snake_case();
-            // constant value may come from valueRef (enum variant) or direct numeric text on type def
-            let ty = &f.ty;
-            // if value_ref exists, try to reference type::Variant constant
-            if let Some(vr) = &f.value_ref {
-                // valueRef has form "TypeName.Variant"
-                let parts: Vec<&str> = vr.split('.').collect();
-                if parts.len() == 2 {
-                    let type_name = parts[0];
-                    let variant = parts[1];
-                    code.push_str(&format!(
-                        "    pub const {}: {} = {}::{};\n",
-                        field_name.to_uppercase(),
-                        type_name,
-                        type_name,
-                        variant
-                    ));
-                    continue;
-                }
-            }
-            // otherwise, look up constant on type or parse as literal
-            if let Some(TypeDef::Primitive {
-                constant: Some(val),
-                primitive,
-                ..
-            }) = schema.types.get(ty)
-            {
-                let rust_type = primitive_to_rust(primitive, opts).unwrap_or_else(|| "u8".into());
-                code.push_str(&format!(
-                    "    pub const {}: {} = {} as {};\n",
-                    field_name.to_uppercase(),
-                    rust_type,
-                    val,
-                    rust_type
-                ));
-            }
-        }
-        code.push_str("}\n\n");
-    }
+    push_constant_field_impl(&mut code, &msg.name, &fields, schema, opts);
     // impl parse_prefix
     code.push_str(&format!("impl {} {{\n", msg.name));
     code.push_str(PARSE_PREFIX_METHOD);
@@ -978,7 +939,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         let name = d.name.to_snake_case();
         let kind = length_kind_token(length_kind_for_data(&d.ty, schema, opts));
         code.push_str(&format!(
-            "    pub fn {name}(&mut self, bytes: &[u8]) -> &mut Self {{\n        write_var_data(&mut self.buf, bytes, {kind}, ENDIAN);\n        self\n    }}\n",
+            "    pub fn {name}(&mut self, bytes: &[u8]) -> Result<&mut Self, EncodeError> {{\n        write_var_data(&mut self.buf, bytes, {kind}, ENDIAN)?;\n        Ok(self)\n    }}\n",
             name = name,
             kind = kind
         ));
@@ -1205,13 +1166,16 @@ fn resolve_type(
         match td {
             TypeDef::Primitive {
                 name: tname,
+                primitive,
                 length,
                 ..
             } => {
-                let rust =
-                    primitive_to_rust_endian(&td_primitive(td), &opts.endian, override_endian)?;
+                let rust = primitive_to_rust_endian(primitive, &opts.endian, override_endian)?;
                 if let Some(len) = length {
                     Some(format!("[{}; {}]", rust, len))
+                } else if override_endian.is_some() && override_endian != Some(opts.endian.as_str())
+                {
+                    Some(rust)
                 } else {
                     Some(tname.clone())
                 }
@@ -1222,15 +1186,6 @@ fn resolve_type(
         }
     } else {
         None
-    }
-}
-
-fn td_primitive(td: &TypeDef) -> String {
-    match td {
-        TypeDef::Primitive { primitive, .. } => primitive.clone(),
-        TypeDef::Enum { encoding, .. } => encoding.clone(),
-        TypeDef::Set { encoding, .. } => encoding.clone(),
-        TypeDef::Composite { .. } => "".into(),
     }
 }
 
@@ -1273,6 +1228,7 @@ fn type_size_bytes(
     schema: &Schema,
     _opts: &GeneratorOptions,
     depth: usize,
+    respect_constant: bool,
 ) -> Option<usize> {
     if depth > 8 {
         return None;
@@ -1283,8 +1239,14 @@ fn type_size_bytes(
     if let Some(td) = schema.types.get(ty) {
         match td {
             TypeDef::Primitive {
-                primitive, length, ..
+                primitive,
+                length,
+                presence,
+                ..
             } => {
+                if respect_constant && presence.as_deref() == Some("constant") {
+                    return Some(0);
+                }
                 let base = primitive_size_bytes(primitive)?;
                 Some(base * length.unwrap_or(1))
             }
@@ -1308,7 +1270,8 @@ fn type_size_bytes(
                             total += base * length.unwrap_or(1);
                         }
                         CompositeField::Ref { ty, .. } => {
-                            total += type_size_bytes(ty, schema, _opts, depth + 1)?;
+                            total +=
+                                type_size_bytes(ty, schema, _opts, depth + 1, respect_constant)?;
                         }
                     }
                 }
@@ -1322,10 +1285,22 @@ fn type_size_bytes(
 
 fn field_size_bytes(field: &Field, schema: &Schema, opts: &GeneratorOptions) -> Option<usize> {
     // constant fields are not encoded
-    if field.presence.as_deref() == Some("constant") {
+    if field_is_constant(field, schema) {
         return Some(0);
     }
-    type_size_bytes(&field.ty, schema, opts, 0)
+    if field.presence.is_some()
+        && let Some(TypeDef::Primitive {
+            primitive,
+            length,
+            presence: Some(p),
+            ..
+        }) = schema.types.get(&field.ty)
+        && p == "constant"
+    {
+        let base = primitive_size_bytes(primitive)?;
+        return Some(base * length.unwrap_or(1));
+    }
+    type_size_bytes(&field.ty, schema, opts, 0, true)
 }
 
 fn write_fields_with_offsets(
@@ -1337,7 +1312,7 @@ fn write_fields_with_offsets(
     let mut cur_offset: Option<usize> = Some(0);
     let mut pad_idx = 0;
     for field in fields {
-        if field.presence.as_deref() == Some("constant") {
+        if field_is_constant(field, schema) {
             continue;
         }
         let ty_name = &field.ty;
@@ -1459,7 +1434,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         composite_field_offset(&g.dimension_type, &dim.block_field, schema, opts).unwrap_or(0);
     let dim_count_offset =
         composite_field_offset(&g.dimension_type, &dim.count_field, schema, opts).unwrap_or(0);
-    let dim_size = type_size_bytes(&g.dimension_type, schema, opts, 0).unwrap_or(0);
+    let dim_size = type_size_bytes(&g.dimension_type, schema, opts, 0, true).unwrap_or(0);
 
     code.push_str(&format!(
         "pub fn parse_{}<'a>(buf: &'a [u8]) -> Option<{}<'a>> {{\n",
@@ -1580,6 +1555,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     code.push_str(&format!("impl {} {{\n", entry_struct));
     code.push_str(PARSE_PREFIX_METHOD);
     code.push_str("}\n\n");
+    push_constant_field_impl(code, &entry_struct, &g_fields, schema, opts);
     if !g_fields.is_empty() {
         code.push_str(&format!("impl {} {{\n", entry_struct));
         optional_methods_for_fields(code, &g_fields, schema, opts, "self");
@@ -1725,7 +1701,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         let name = d.name.to_snake_case();
         let kind = length_kind_token(length_kind_for_data(&d.ty, schema, opts));
         code.push_str(&format!(
-            "    pub fn {name}(&mut self, bytes: &[u8]) -> &mut Self {{\n        write_var_data(self.buf, bytes, {kind}, ENDIAN);\n        self\n    }}\n",
+            "    pub fn {name}(&mut self, bytes: &[u8]) -> Result<&mut Self, EncodeError> {{\n        write_var_data(self.buf, bytes, {kind}, ENDIAN)?;\n        Ok(self)\n    }}\n",
             name = name,
             kind = kind
         ));
@@ -2015,6 +1991,103 @@ fn type_primitive<'a>(ty: &str, schema: &'a Schema) -> Option<&'a str> {
         Some(TypeDef::Primitive { primitive, .. }) => Some(primitive.as_str()),
         _ => None,
     }
+}
+
+fn field_is_constant(field: &Field, schema: &Schema) -> bool {
+    if field.presence.as_deref() == Some("constant") {
+        return true;
+    }
+    if field.presence.is_some() {
+        return false;
+    }
+    matches!(
+        schema.types.get(&field.ty),
+        Some(TypeDef::Primitive {
+            presence: Some(p),
+            ..
+        }) if p == "constant"
+    )
+}
+
+fn push_constant_field_impl(
+    code: &mut String,
+    struct_name: &str,
+    fields: &[&Field],
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) {
+    let const_fields: Vec<_> = fields
+        .iter()
+        .copied()
+        .filter(|f| field_is_constant(f, schema))
+        .collect();
+    if const_fields.is_empty() {
+        return;
+    }
+    code.push_str(&format!("impl {} {{\n", struct_name));
+    for f in const_fields {
+        let field_name = f.name.to_snake_case();
+        let ty = &f.ty;
+        if let Some(vr) = &f.value_ref {
+            let parts: Vec<&str> = vr.split('.').collect();
+            if parts.len() == 2 {
+                let type_name = parts[0];
+                let variant = parts[1];
+                code.push_str(&format!(
+                    "    pub const {}: {} = {}::{};\n",
+                    field_name.to_uppercase(),
+                    type_name,
+                    type_name,
+                    variant
+                ));
+                continue;
+            }
+        }
+        if let Some(TypeDef::Primitive {
+            constant: Some(val),
+            primitive,
+            length,
+            ..
+        }) = schema.types.get(ty)
+        {
+            let rust_type = match primitive_to_rust(primitive, opts) {
+                Some(t) => t,
+                None => continue,
+            };
+            if let Some(len) = length {
+                if let Some((_, expr)) = const_array_expr(primitive, &rust_type, val, *len) {
+                    code.push_str(&format!(
+                        "    pub const {}: {} = {};\n",
+                        field_name.to_uppercase(),
+                        ty,
+                        expr
+                    ));
+                }
+            } else if let Some(raw_expr) = const_scalar_expr(primitive, &rust_type, val) {
+                let alias_target = opts
+                    .constant_type_aliases
+                    .get(ty)
+                    .cloned()
+                    .or_else(|| constant_type_alias_from_schema(ty, schema))
+                    .unwrap_or_else(|| rust_type.clone());
+                let expr = if matches!(
+                    schema.types.get(&alias_target),
+                    Some(TypeDef::Enum { .. } | TypeDef::Set { .. })
+                ) {
+                    format!("{}({})", alias_target, raw_expr)
+                } else {
+                    raw_expr
+                };
+                code.push_str(&format!(
+                    "    pub const {}: {} = {};\n",
+                    field_name.to_uppercase(),
+                    ty,
+                    expr
+                ));
+            }
+        }
+    }
+    code.push_str("}\n\n");
 }
 
 fn field_is_optional(field: &Field, schema: &Schema) -> bool {
@@ -2416,7 +2489,7 @@ fn block_length_from_fields(
     let mut cur = 0usize;
     let mut max_end = 0usize;
     for field in fields {
-        if field.presence.as_deref() == Some("constant") {
+        if field_is_constant(field, schema) {
             continue;
         }
         let sz = field_size_bytes(field, schema, opts)?;
@@ -2456,7 +2529,7 @@ fn layout_fields<'a>(
     let mut cur = 0usize;
     let mut layout = Vec::new();
     for f in fields {
-        if f.presence.as_deref() == Some("constant") {
+        if field_is_constant(f, schema) {
             continue;
         }
         if resolve_type(&f.ty, schema, opts, f.byte_order.as_deref()).is_none() {
@@ -2509,7 +2582,7 @@ fn composite_field_offset(
                     if name.to_snake_case() == target {
                         return Some(cur);
                     }
-                    cur += type_size_bytes(ty, schema, opts, 0)?;
+                    cur += type_size_bytes(ty, schema, opts, 0, true)?;
                 }
             }
         }

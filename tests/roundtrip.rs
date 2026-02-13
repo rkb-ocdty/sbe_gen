@@ -33,15 +33,15 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
                 legs.entry(|entry| {
                     entry.qty(10);
                     entry.side(1);
-                    entry.note(b"bid");
+                    entry.note(b"bid").expect("note");
                 });
                 legs.entry(|entry| {
                     entry.qty(20);
                     entry.side(2);
-                    entry.note(b"ask");
+                    entry.note(b"ask").expect("note");
                 });
             });
-            builder.comment(b"ok");
+            builder.comment(b"ok").expect("comment");
 
             let framed = builder.finish_with_header();
             let (hdr, body) = MessageHeader::parse_prefix(&framed).expect("header");

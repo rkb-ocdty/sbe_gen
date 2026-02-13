@@ -163,8 +163,8 @@ fn template_48_trade_summary() {
     assert_eq!(body.number_of_orders.get(), 3);
     assert_eq!(body.aggressor_side.0, 0);
     assert_eq!(body.md_update_action.0, 0);
-    assert_eq!(body.md_entry_type.0, 177);
-    assert_eq!(body.md_trade_entry_id.get(), 0);
+    assert_eq!(trade_summary::NoMDEntriesEntry::MD_ENTRY_TYPE.0, b'2');
+    assert_eq!(body.md_trade_entry_id.get(), 177);
 
     // Consume the one entry so the remainder is at the next group.
     let after_entries = iter.remainder();
@@ -395,8 +395,6 @@ fn template_47_builder_roundtrip() {
 #[test]
 fn template_48_builder_roundtrip() {
     rebuild_payload(TEMPLATE_48_PACKET, |msg_hdr, body| {
-        const MD_ENTRY_TYPE_OFFSET: usize = 26;
-
         let (view, after_fixed) = trade_summary::parse_with_header(body, msg_hdr).expect("parse");
         let msg = *view.body;
         let entries = trade_summary::parse_no_md_entries(after_fixed).expect("entries");
@@ -421,7 +419,8 @@ fn template_48_builder_roundtrip() {
                             .md_entry_size(body.md_entry_size)
                             .security_id(body.security_id)
                             .rpt_seq(body.rpt_seq)
-                            .number_of_orders(body.number_of_orders);
+                            .number_of_orders(body.number_of_orders)
+                            .md_trade_entry_id(body.md_trade_entry_id);
                     });
                 }
             })
@@ -456,11 +455,6 @@ fn template_48_builder_roundtrip() {
                 &mut out,
                 entry_base + trade_summary::NoMDEntriesEntry::MDUPDATEACTION_OFFSET as usize,
                 entry.body.md_update_action.0,
-            );
-            set_u8(
-                &mut out,
-                entry_base + MD_ENTRY_TYPE_OFFSET,
-                entry.body.md_entry_type.0,
             );
         }
 

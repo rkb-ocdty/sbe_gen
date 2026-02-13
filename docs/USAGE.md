@@ -257,7 +257,8 @@ let (raw, tail) = book.parse_raw(after_levels).expect("raw data");
 assert!(tail.is_empty());
 ```
 
-Encode the same message with the builder API:
+Encode the same message with the builder API. Variable-length setters
+return `Result` when the payload does not fit the length prefix type:
 
 ```rust
 let mut builder = BookBuilder::new();
@@ -266,15 +267,15 @@ builder.levels(|levels| {
     levels.entry(|entry| {
         entry.price(101_500);
         entry.qty(10);
-        entry.note(b"bid");
+        entry.note(b"bid").expect("note");
     });
     levels.entry(|entry| {
         entry.price(101_600);
         entry.qty(12);
-        entry.note(b"ask");
+        entry.note(b"ask").expect("note");
     });
 });
-builder.raw(b"payload");
+builder.raw(b"payload").expect("raw");
 
 let framed = builder.finish_with_header(); // or finish() for the body only
 ```

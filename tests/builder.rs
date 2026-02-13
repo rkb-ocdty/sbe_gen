@@ -32,7 +32,7 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
                 bids.entry(|entry| {
                     entry.price(-5);
                     entry.qty(10);
-                    entry.note(b"hi");
+                    entry.note(b"hi").expect("note");
                     entry.tags(|tags| {
                         tags.entry(|tag| {
                             tag.tag(99);
@@ -40,7 +40,7 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
                     });
                 });
             });
-            builder.comment(b"ok");
+            builder.comment(b"ok").expect("comment");
 
             let body = builder.finish();
             let (msg, rest) = OrderBook::parse_prefix(&body).expect("parse header");

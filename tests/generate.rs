@@ -156,3 +156,49 @@ fn byte_order_and_offsets() {
     assert!(endian_rs.contains("B_OFFSET: u32 = 2"));
     assert!(endian_rs.contains("C_OFFSET: u32 = 4"));
 }
+
+#[test]
+fn type_level_constants_are_not_encoded() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <type name="ConstU16" primitiveType="uint16" presence="constant">7</type>
+            </types>
+            <message name="ConstMsg" id="1">
+                <field name="magic" id="1" type="ConstU16" />
+                <field name="seq" id="2" type="uint32" />
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let msg_rs = module_map
+        .get("const_msg.rs")
+        .expect("const_msg.rs emitted");
+    assert!(!msg_rs.contains("pub magic:"));
+    assert!(msg_rs.contains("pub const MAGIC: ConstU16"));
+    assert!(msg_rs.contains("U16::new(7)"));
+    assert!(msg_rs.contains("pub const BLOCK_LENGTH: u16 = 4"));
+}
+
+#[test]
+fn byte_order_override_applies_to_type_aliases() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <type name="Price" primitiveType="uint16"/>
+            </types>
+            <message name="AliasEndian" id="1" blockLength="2">
+                <field name="price" id="1" type="Price" byteOrder="big" />
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let alias_rs = module_map
+        .get("alias_endian.rs")
+        .expect("alias_endian.rs emitted");
+    assert!(alias_rs.contains("pub price: zerocopy::byteorder::big_endian::U16"));
+}

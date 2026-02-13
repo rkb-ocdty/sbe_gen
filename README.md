@@ -273,6 +273,8 @@ Every message module includes a builder that writes the fixed block,
 groups and variable data with the correct padding, offsets and length
 prefixes. Builders accept native Rust numeric types and take care of the
 endianness for you.
+Variable-length field setters return `Result` if the payload exceeds the
+length prefix type.
 
 ```rust
 use sbe::book::*;
@@ -283,10 +285,10 @@ builder.levels(|levels| {
     levels.entry(|entry| {
         entry.price(101_500);
         entry.qty(10);
-        entry.note(b"resting");
+        entry.note(b"resting").expect("note");
     });
 });
-builder.raw(b"payload");
+builder.raw(b"payload").expect("raw");
 
 // Emit the message framed with the standard SBE header
 let framed = builder.finish_with_header();
