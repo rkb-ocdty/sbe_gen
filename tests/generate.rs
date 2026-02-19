@@ -96,6 +96,9 @@ fn optional_fields_expose_option_helpers() {
     let opt_rs = module_map.get("opt.rs").expect("opt.rs emitted");
     assert!(opt_rs.contains("pub maybe_price: I64"));
     assert!(opt_rs.contains("pub fn maybe_price_opt"));
+    assert!(opt_rs.contains("#[inline]\n    pub fn maybe_price_opt"));
+    assert!(opt_rs.contains("#[inline]\n    pub fn has_req"));
+    assert!(opt_rs.contains("#[inline]\n    pub fn req(&self) -> Option<&U32>"));
     assert!(opt_rs.contains("MAYBE_PRICE_SINCE_VERSION"));
 }
 
@@ -249,6 +252,8 @@ fn constant_fields_are_not_writable_in_builder_or_encoder() {
     let msg_rs = module_map
         .get("establish503.rs")
         .expect("establish503.rs emitted");
-    assert!(!msg_rs.contains("pub fn customer_flow("));
+    assert!(!msg_rs.contains("pub fn customer_flow(&mut self, value:"));
+    assert!(msg_rs.contains("pub fn customer_flow(&self) -> ClientFlowType"));
+    assert!(msg_rs.contains("#[inline]\n    pub fn customer_flow(&self) -> ClientFlowType"));
     assert!(msg_rs.contains("pub const CUSTOMER_FLOW: ClientFlowType"));
 }

@@ -1111,12 +1111,34 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
         msg.name, msg.name
     ));
     code.push_str(&format!("impl<'a> {}View<'a> {{\n", msg.name));
-    for layout in &field_layouts {
-        let field = layout.field;
+    for field in &fields {
         let fname = field.name.to_snake_case();
         let since = field.since_version.unwrap_or(0);
+        if field_is_constant(field, schema) {
+            code.push_str(&format!(
+                "    #[inline]\n    pub fn has_{fname}(&self) -> bool {{\n        self.acting_version >= {since} as u16\n    }}\n",
+                fname = fname,
+                since = since
+            ));
+            if let Some((ty, _)) = constant_field_value_expr(field, schema, opts) {
+                code.push_str(&format!(
+                    "    #[inline]\n    pub fn {fname}(&self) -> Option<{ty}> {{\n        if !self.has_{fname}() {{ return None; }}\n        Some({msg_name}::{const_name})\n    }}\n",
+                    fname = fname,
+                    ty = ty,
+                    msg_name = msg.name,
+                    const_name = fname.to_uppercase()
+                ));
+            }
+            continue;
+        }
+        let Some(layout) = field_layouts
+            .iter()
+            .find(|layout| std::ptr::eq(layout.field, *field))
+        else {
+            continue;
+        };
         code.push_str(&format!(
-            "    pub fn has_{fname}(&self) -> bool {{\n        if self.acting_version < {since} as u16 {{ return false; }}\n        {offset} + {size} <= self.acting_block_length\n    }}\n",
+            "    #[inline]\n    pub fn has_{fname}(&self) -> bool {{\n        if self.acting_version < {since} as u16 {{ return false; }}\n        {offset} + {size} <= self.acting_block_length\n    }}\n",
             fname = fname,
             since = since,
             offset = layout.offset,
@@ -1124,7 +1146,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
         ));
         if let Some(resolved) = resolve_type(&field.ty, schema, opts, field.byte_order.as_deref()) {
             code.push_str(&format!(
-                "    pub fn {fname}(&self) -> Option<&{ty}> {{\n        if !self.has_{fname}() {{ return None; }}\n        let bytes = &self.body.bytes()[{offset}..{offset_plus}];\n        let (r, _) = Ref::<_, {ty}>::from_prefix(bytes).ok()?;\n        Some(Ref::into_ref(r))\n    }}\n",
+                "    #[inline]\n    pub fn {fname}(&self) -> Option<&{ty}> {{\n        if !self.has_{fname}() {{ return None; }}\n        let bytes = &self.body.bytes()[{offset}..{offset_plus}];\n        let (r, _) = Ref::<_, {ty}>::from_prefix(bytes).ok()?;\n        Some(Ref::into_ref(r))\n    }}\n",
                 fname = fname,
                 ty = resolved,
                 offset = layout.offset,
@@ -1551,7 +1573,9 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     let group_name = &g.name;
     let group_snake = g.name.to_snake_case();
     let entry_struct = format!("{}Entry", group_name);
+    let entry_body = format!("{}Body", entry_struct);
     let entry_view = format!("{}EntryView", group_name);
+    let parse_entry_body_fn = format!("parse_{}_entry_body", group_snake);
     let group_struct = format!("{}Group", group_name);
     let g_block_length = group_block_length(g, schema, opts);
     let iter_name = format!("{}Iter", group_name);
@@ -1672,8 +1696,16 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     ));
 
     code.push_str(&format!(
-        "#[derive(Debug, Clone, Copy)]\npub struct {}<'a> {{\n    pub body: &'a {},\n",
-        entry_view, entry_struct
+        "#[derive(Debug, Clone)]\npub enum {}<'a> {{\n    Borrowed(&'a {}, &'a [u8]),\n    Owned(Vec<u8>),\n}}\n\n",
+        entry_body, entry_struct
+    ));
+    code.push_str(&format!(
+        "impl<'a> core::ops::Deref for {}<'a> {{\n    type Target = {};\n    fn deref(&self) -> &Self::Target {{\n        match self {{\n            Self::Borrowed(m, _) => m,\n            Self::Owned(bytes) => {{\n                let (entry, _) = Ref::<_, {}>::from_prefix(bytes.as_slice()).expect(\"padded group entry\");\n                Ref::into_ref(entry)\n            }}\n        }}\n    }}\n}}\n\n",
+        entry_body, entry_struct, entry_struct
+    ));
+    code.push_str(&format!(
+        "#[derive(Debug, Clone)]\npub struct {}<'a> {{\n    pub body: {}<'a>,\n",
+        entry_view, entry_body
     ));
     for nested in &g_nested {
         code.push_str(&format!(
@@ -1704,6 +1736,12 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     code.push_str(&format!("impl {} {{\n", entry_struct));
     code.push_str(PARSE_PREFIX_METHOD);
     code.push_str("}\n\n");
+    code.push_str(&format!(
+        "fn {parse_fn}<'a>(entry: &'a [u8], block_length: usize) -> Option<{entry_body}<'a>> {{\n    if entry.len() < block_length {{ return None; }}\n    let needed = core::mem::size_of::<{entry_struct}>();\n    if block_length >= needed {{\n        let (body, _) = Ref::<_, {entry_struct}>::from_prefix(&entry[..needed]).ok()?;\n        Some({entry_body}::Borrowed(Ref::into_ref(body), &entry[..needed]))\n    }} else {{\n        let mut owned = vec![0u8; needed];\n        owned[..block_length].copy_from_slice(&entry[..block_length]);\n        Some({entry_body}::Owned(owned))\n    }}\n}}\n\n",
+        parse_fn = parse_entry_body_fn,
+        entry_body = entry_body,
+        entry_struct = entry_struct
+    ));
     push_constant_field_impl(code, &entry_struct, &g_fields, schema, opts);
     if !g_fields.is_empty() {
         code.push_str(&format!("impl {} {{\n", entry_struct));
@@ -1996,8 +2034,8 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
 
     if has_any_var {
         code.push_str(&format!(
-            "impl<'a> Iterator for {}<'a> {{\n    type Item = {}<'a>;\n    fn next(&mut self) -> Option<Self::Item> {{\n        if self.entries_left == 0 {{\n            return None;\n        }}\n        let blen = self.block_length;\n        if blen > self.remaining.len() {{\n            return None;\n        }}\n        let (entry, mut tail) = self.remaining.split_at(blen);\n        let (body, _) = {}::parse_prefix(entry)?;\n",
-            iter_name, entry_view, entry_struct
+            "impl<'a> Iterator for {}<'a> {{\n    type Item = {}<'a>;\n    fn next(&mut self) -> Option<Self::Item> {{\n        if self.entries_left == 0 {{\n            return None;\n        }}\n        let blen = self.block_length;\n        if blen > self.remaining.len() {{\n            return None;\n        }}\n        let (entry, mut tail) = self.remaining.split_at(blen);\n        let body = {}(entry, blen)?;\n",
+            iter_name, entry_view, parse_entry_body_fn
         ));
         let mut data_idx = 0;
         for member in &g.members {
@@ -2053,8 +2091,8 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
             "    fn next(&mut self) -> Option<Self::Item> {\n        if self.entries_left == 0 {\n            return None;\n        }\n        let blen = self.block_length;\n        if blen > self.remaining.len() {\n            return None;\n        }\n",
         );
         code.push_str(&format!(
-            "        let (entry, tail) = self.remaining.split_at(blen);\n        let (body, _) = {}::parse_prefix(entry)?;\n",
-            entry_struct
+            "        let (entry, tail) = self.remaining.split_at(blen);\n        let body = {}(entry, blen)?;\n",
+            parse_entry_body_fn
         ));
         code.push_str(
             "        self.remaining = tail;\n        self.entries_left -= 1;\n        Some(",
@@ -2283,6 +2321,9 @@ fn field_is_constant(field: &Field, schema: &Schema) -> bool {
     if field.presence.as_deref() == Some("constant") {
         return true;
     }
+    if field.value_ref.is_some() {
+        return true;
+    }
     if field.presence.is_some() {
         return false;
     }
@@ -2293,6 +2334,51 @@ fn field_is_constant(field: &Field, schema: &Schema) -> bool {
             ..
         }) if p == "constant"
     )
+}
+
+fn constant_field_value_expr(
+    field: &Field,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) -> Option<(String, String)> {
+    if let Some(value_ref) = &field.value_ref
+        && let Some((type_name, variant)) = value_ref.split_once('.')
+    {
+        return Some((type_name.to_string(), format!("{type_name}::{variant}")));
+    }
+
+    if let Some(TypeDef::Primitive {
+        constant: Some(val),
+        primitive,
+        length,
+        ..
+    }) = schema.types.get(&field.ty)
+    {
+        let rust_type = primitive_to_rust(primitive, opts)?;
+        if let Some(len) = length {
+            let (_, expr) = const_array_expr(primitive, &rust_type, val, *len)?;
+            return Some((field.ty.clone(), expr));
+        }
+
+        let raw_expr = const_scalar_expr(primitive, &rust_type, val)?;
+        let alias_target = opts
+            .constant_type_aliases
+            .get(&field.ty)
+            .cloned()
+            .or_else(|| constant_type_alias_from_schema(&field.ty, schema))
+            .unwrap_or_else(|| rust_type.clone());
+        let expr = if matches!(
+            schema.types.get(&alias_target),
+            Some(TypeDef::Enum { .. } | TypeDef::Set { .. })
+        ) {
+            format!("{alias_target}({raw_expr})")
+        } else {
+            raw_expr
+        };
+        return Some((field.ty.clone(), expr));
+    }
+
+    None
 }
 
 fn push_constant_field_impl(
@@ -2313,64 +2399,20 @@ fn push_constant_field_impl(
     code.push_str(&format!("impl {} {{\n", struct_name));
     for f in const_fields {
         let field_name = f.name.to_snake_case();
-        let ty = &f.ty;
-        if let Some(vr) = &f.value_ref {
-            let parts: Vec<&str> = vr.split('.').collect();
-            if parts.len() == 2 {
-                let type_name = parts[0];
-                let variant = parts[1];
-                code.push_str(&format!(
-                    "    pub const {}: {} = {}::{};\n",
-                    field_name.to_uppercase(),
-                    type_name,
-                    type_name,
-                    variant
-                ));
-                continue;
-            }
-        }
-        if let Some(TypeDef::Primitive {
-            constant: Some(val),
-            primitive,
-            length,
-            ..
-        }) = schema.types.get(ty)
-        {
-            let rust_type = match primitive_to_rust(primitive, opts) {
-                Some(t) => t,
-                None => continue,
-            };
-            if let Some(len) = length {
-                if let Some((_, expr)) = const_array_expr(primitive, &rust_type, val, *len) {
-                    code.push_str(&format!(
-                        "    pub const {}: {} = {};\n",
-                        field_name.to_uppercase(),
-                        ty,
-                        expr
-                    ));
-                }
-            } else if let Some(raw_expr) = const_scalar_expr(primitive, &rust_type, val) {
-                let alias_target = opts
-                    .constant_type_aliases
-                    .get(ty)
-                    .cloned()
-                    .or_else(|| constant_type_alias_from_schema(ty, schema))
-                    .unwrap_or_else(|| rust_type.clone());
-                let expr = if matches!(
-                    schema.types.get(&alias_target),
-                    Some(TypeDef::Enum { .. } | TypeDef::Set { .. })
-                ) {
-                    format!("{}({})", alias_target, raw_expr)
-                } else {
-                    raw_expr
-                };
-                code.push_str(&format!(
-                    "    pub const {}: {} = {};\n",
-                    field_name.to_uppercase(),
-                    ty,
-                    expr
-                ));
-            }
+        let const_name = field_name.to_uppercase();
+        if let Some((ty, expr)) = constant_field_value_expr(f, schema, opts) {
+            code.push_str(&format!(
+                "    pub const {const_name}: {ty} = {expr};\n",
+                const_name = const_name,
+                ty = ty,
+                expr = expr
+            ));
+            code.push_str(&format!(
+                "    #[inline]\n    pub fn {field_name}(&self) -> {ty} {{\n        Self::{const_name}\n    }}\n",
+                field_name = field_name,
+                ty = ty,
+                const_name = const_name
+            ));
         }
     }
     code.push_str("}\n\n");
@@ -2499,7 +2541,7 @@ fn optional_methods_for_fields(
                     None => continue,
                 };
                 code.push_str(&format!(
-                    "    pub fn {method}(&self) -> Option<{ty}> {{\n        let v = {self_expr}.{field};\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(v) }}\n    }}\n",
+                    "    #[inline]\n    pub fn {method}(&self) -> Option<{ty}> {{\n        let v = {self_expr}.{field};\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(v) }}\n    }}\n",
                     method = method_name,
                     ty = field.ty,
                     self_expr = self_expr,
@@ -2537,7 +2579,7 @@ fn optional_methods_for_fields(
                 None => continue,
             };
             code.push_str(&format!(
-                "    pub fn {method}(&self) -> Option<{ty}> {{\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(raw) }}\n    }}\n",
+                "    #[inline]\n    pub fn {method}(&self) -> Option<{ty}> {{\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(raw) }}\n    }}\n",
                 method = method_name,
                 ty = host_type,
                 val = val_expr,
@@ -2606,7 +2648,7 @@ fn optional_methods_for_composite_fields(
                 };
                 let method_name = format!("{}_opt", name.to_snake_case());
                 code.push_str(&format!(
-                    "    pub fn {method}(&self) -> Option<{ty}> {{\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(raw) }}\n    }}\n",
+                    "    #[inline]\n    pub fn {method}(&self) -> Option<{ty}> {{\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(raw) }}\n    }}\n",
                     method = method_name,
                     ty = host_type,
                     val = val_expr,
@@ -2652,7 +2694,7 @@ fn optional_methods_for_composite_fields(
                 };
                 let method_name = format!("{}_opt", name.to_snake_case());
                 code.push_str(&format!(
-                    "    pub fn {method}(&self) -> Option<{ty}> {{\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(raw) }}\n    }}\n",
+                    "    #[inline]\n    pub fn {method}(&self) -> Option<{ty}> {{\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(raw) }}\n    }}\n",
                     method = method_name,
                     ty = host_type,
                     val = val_expr,

@@ -5,6 +5,7 @@ use crate::generated::cme_mdp3::MessageHeader;
 use crate::generated::cme_mdp3::md_incremental_refresh_order_book47 as inc_book;
 use crate::generated::cme_mdp3::md_incremental_refresh_session_statistics51 as session_stats;
 use crate::generated::cme_mdp3::md_incremental_refresh_trade_summary48 as trade_summary;
+use crate::generated::cme_mdp3::md_instrument_definition_spread56 as spread_def;
 use crate::generated::cme_mdp3::security_status30 as security_status;
 use zerocopy::IntoBytes;
 use zerocopy::byteorder::little_endian::U16;
@@ -526,4 +527,64 @@ fn template_51_builder_roundtrip() {
 
         out
     });
+}
+
+#[test]
+fn instrument_definition_spread56_constants_do_not_affect_layout_or_view_access() {
+    assert_eq!(
+        mem::size_of::<spread_def::MDInstrumentDefinitionSpread56>(),
+        spread_def::MDInstrumentDefinitionSpread56::BLOCK_LENGTH as usize
+    );
+    assert_eq!(
+        mem::size_of::<spread_def::NoLegsEntry>(),
+        spread_def::NoLegsGroupBuilder::BLOCK_LENGTH as usize
+    );
+
+    let body = vec![0u8; spread_def::MDInstrumentDefinitionSpread56::BLOCK_LENGTH as usize];
+    let (msg, tail) = spread_def::MDInstrumentDefinitionSpread56::parse_prefix(&body)
+        .expect("spread definition parse");
+    assert!(tail.is_empty());
+    assert_eq!(msg.security_id_source(), [56u8]);
+    assert_eq!(
+        spread_def::MDInstrumentDefinitionSpread56::SECURITY_ID_SOURCE,
+        [56u8]
+    );
+
+    let hdr = MessageHeader {
+        block_length: U16::new(1),
+        template_id: U16::new(spread_def::MDInstrumentDefinitionSpread56::TEMPLATE_ID),
+        schema_id: U16::new(spread_def::MDInstrumentDefinitionSpread56::SCHEMA_ID),
+        version: U16::new(spread_def::MDInstrumentDefinitionSpread56::SCHEMA_VERSION),
+    };
+    let (view, rest) = spread_def::parse_with_header(&body, &hdr).expect("spread definition view");
+    assert_eq!(rest.len(), body.len() - 1);
+    assert!(view.has_security_id_source());
+    assert_eq!(view.security_id_source(), Some([56u8]));
+    assert!(!view.has_security_id());
+    assert!(view.security_id().is_none());
+}
+
+#[test]
+fn instrument_definition_spread56_no_legs_parses_when_group_block_length_is_shorter() {
+    let mut group_bytes = Vec::new();
+    group_bytes.extend_from_slice(&17u16.to_le_bytes());
+    group_bytes.push(1u8);
+
+    let mut entry = [0u8; 17];
+    entry[0..4].copy_from_slice(&123i32.to_le_bytes());
+    entry[4] = 1;
+    entry[5] = 7;
+    group_bytes.extend_from_slice(&entry);
+
+    let group = spread_def::parse_no_legs(&group_bytes).expect("parse no legs");
+    assert_eq!(group.count(), 1);
+
+    let mut it = group.iter();
+    let first = it.next().expect("first leg");
+    assert_eq!(first.body.leg_security_id.get(), 123);
+    assert_eq!(first.body.leg_side.0, 1);
+    assert_eq!(first.body.leg_ratio_qty, 7);
+    assert_eq!(first.body.leg_security_id_source(), [56u8]);
+    assert!(it.next().is_none());
+    assert!(it.remainder().is_empty());
 }
