@@ -1704,7 +1704,11 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         entry_body, entry_struct, entry_struct
     ));
     code.push_str(&format!(
-        "#[derive(Debug, Clone)]\npub struct {}<'a> {{\n    pub body: {}<'a>,\n",
+        "impl<'a> {}<'a> {{\n    fn bytes(&self) -> &[u8] {{\n        match self {{\n            Self::Borrowed(_, raw) => raw,\n            Self::Owned(bytes) => bytes.as_slice(),\n        }}\n    }}\n}}\n\n",
+        entry_body
+    ));
+    code.push_str(&format!(
+        "#[derive(Debug, Clone)]\npub struct {}<'a> {{\n    pub body: {}<'a>,\n    pub acting_block_length: usize,\n",
         entry_view, entry_body
     ));
     for nested in &g_nested {
@@ -1743,6 +1747,52 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         entry_struct = entry_struct
     ));
     push_constant_field_impl(code, &entry_struct, &g_fields, schema, opts);
+    if !g_fields.is_empty() {
+        code.push_str(&format!("impl<'a> {}<'a> {{\n", entry_view));
+        for field in &g_fields {
+            let fname = field.name.to_snake_case();
+            if field_is_constant(field, schema) {
+                code.push_str(&format!(
+                    "    #[inline]\n    pub fn has_{fname}(&self) -> bool {{\n        true\n    }}\n",
+                    fname = fname
+                ));
+                if let Some((ty, _)) = constant_field_value_expr(field, schema, opts) {
+                    code.push_str(&format!(
+                        "    #[inline]\n    pub fn {fname}(&self) -> Option<{ty}> {{\n        if !self.has_{fname}() {{ return None; }}\n        Some({entry_struct}::{const_name})\n    }}\n",
+                        fname = fname,
+                        ty = ty,
+                        entry_struct = entry_struct,
+                        const_name = fname.to_uppercase()
+                    ));
+                }
+                continue;
+            }
+            let Some(layout) = entry_layout
+                .iter()
+                .find(|layout| std::ptr::eq(layout.field, *field))
+            else {
+                continue;
+            };
+            code.push_str(&format!(
+                "    #[inline]\n    pub fn has_{fname}(&self) -> bool {{\n        {offset} + {size} <= self.acting_block_length\n    }}\n",
+                fname = fname,
+                offset = layout.offset,
+                size = layout.size
+            ));
+            if let Some(resolved) =
+                resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+            {
+                code.push_str(&format!(
+                    "    #[inline]\n    pub fn {fname}(&self) -> Option<&{ty}> {{\n        if !self.has_{fname}() {{ return None; }}\n        let bytes = &self.body.bytes()[{offset}..{offset_plus}];\n        let (r, _) = Ref::<_, {ty}>::from_prefix(bytes).ok()?;\n        Some(Ref::into_ref(r))\n    }}\n",
+                    fname = fname,
+                    ty = resolved,
+                    offset = layout.offset,
+                    offset_plus = layout.offset + layout.size
+                ));
+            }
+        }
+        code.push_str("}\n\n");
+    }
     if !g_fields.is_empty() {
         code.push_str(&format!("impl {} {{\n", entry_struct));
         optional_methods_for_fields(code, &g_fields, schema, opts, "self");
@@ -2065,7 +2115,10 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         code.push_str(
             "        self.remaining = tail;\n        self.entries_left -= 1;\n        Some(",
         );
-        code.push_str(&format!("{} {{ body", entry_view));
+        code.push_str(&format!(
+            "{} {{ body, acting_block_length: blen",
+            entry_view
+        ));
         data_idx = 0;
         for member in &g.members {
             match member {
@@ -2097,7 +2150,10 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         code.push_str(
             "        self.remaining = tail;\n        self.entries_left -= 1;\n        Some(",
         );
-        code.push_str(&format!("{} {{ body }}", entry_view));
+        code.push_str(&format!(
+            "{} {{ body, acting_block_length: blen }}",
+            entry_view
+        ));
         code.push_str(")\n    }\n}\n\n");
     }
 
@@ -2152,32 +2208,92 @@ struct DimensionFields {
     count_field_ty: String,
 }
 
+fn dimension_field_rust_type(ty: &str, schema: &Schema, opts: &GeneratorOptions) -> Option<String> {
+    if let Some(td) = schema.types.get(ty) {
+        match td {
+            TypeDef::Primitive {
+                primitive,
+                presence,
+                ..
+            } => {
+                if presence.as_deref() == Some("constant") {
+                    return None;
+                }
+                primitive_to_rust(primitive, opts)
+            }
+            TypeDef::Enum { encoding, .. } | TypeDef::Set { encoding, .. } => {
+                primitive_to_rust(encoding, opts)
+            }
+            TypeDef::Composite { .. } => None,
+        }
+    } else {
+        primitive_to_rust(ty, opts)
+    }
+}
+
 fn dimension_fields(schema: &Schema, dim_type: &str, opts: &GeneratorOptions) -> DimensionFields {
     if let Some(TypeDef::Composite { fields, .. }) = schema.types.get(dim_type) {
-        let mut prim_fields = Vec::new();
+        let mut dim_fields = Vec::new();
         for f in fields {
-            if let CompositeField::Type {
-                name, primitive, ..
-            } = f
-                && let Some(rust) = primitive_to_rust(primitive, opts)
-            {
-                prim_fields.push((name.to_snake_case(), rust));
+            match f {
+                CompositeField::Type {
+                    name,
+                    primitive,
+                    presence,
+                    ..
+                } => {
+                    if presence.as_deref() == Some("constant") {
+                        continue;
+                    }
+                    if let Some(rust) = primitive_to_rust(primitive, opts) {
+                        dim_fields.push((name.to_snake_case(), rust));
+                    }
+                }
+                CompositeField::Ref { name, ty } => {
+                    if let Some(rust) = dimension_field_rust_type(ty, schema, opts) {
+                        dim_fields.push((name.to_snake_case(), rust));
+                    }
+                }
             }
         }
-        let block = prim_fields
+
+        let norm = |name: &str| name.replace('_', "").to_lowercase();
+        let block = dim_fields
             .iter()
-            .find(|(n, _)| n.contains("block_length") || n.contains("blocklength"))
+            .find(|(n, _)| norm(n) == "blocklength")
             .cloned()
-            .or_else(|| prim_fields.first().cloned())
+            .or_else(|| {
+                dim_fields
+                    .iter()
+                    .find(|(n, _)| norm(n).contains("blocklength"))
+                    .cloned()
+            })
+            .or_else(|| dim_fields.first().cloned())
             .unwrap_or_else(|| ("block_length".into(), "U16".into()));
-        let mut count = prim_fields
+        let mut count = dim_fields
             .iter()
-            .find(|(n, _)| n.contains("num_in_group") || n.contains("numingroup"))
+            .find(|(n, _)| {
+                *n != block.0 && {
+                    let nn = norm(n);
+                    nn == "numingroup" || nn == "count"
+                }
+            })
             .cloned()
-            .or_else(|| prim_fields.get(1).cloned())
+            .or_else(|| {
+                dim_fields
+                    .iter()
+                    .find(|(n, _)| {
+                        *n != block.0 && {
+                            let nn = norm(n);
+                            nn.contains("numingroup") || nn.contains("count")
+                        }
+                    })
+                    .cloned()
+            })
+            .or_else(|| dim_fields.iter().find(|(n, _)| *n != block.0).cloned())
             .unwrap_or_else(|| ("num_in_group".into(), "U16".into()));
         // allow block and count to be the same when only one field exists: duplicate
-        if block.0 == count.0 && prim_fields.len() == 1 {
+        if block.0 == count.0 && dim_fields.len() <= 1 {
             count = ("num_in_group".into(), block.1.clone());
         }
         return DimensionFields {
@@ -2345,6 +2461,35 @@ fn constant_field_value_expr(
         && let Some((type_name, variant)) = value_ref.split_once('.')
     {
         return Some((type_name.to_string(), format!("{type_name}::{variant}")));
+    }
+
+    if let Some(val) = field.constant.as_deref() {
+        let const_ty = resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+            .unwrap_or_else(|| field.ty.clone());
+        if let Some(td) = schema.types.get(&field.ty) {
+            match td {
+                TypeDef::Primitive {
+                    primitive, length, ..
+                } => {
+                    let rust_type = primitive_to_rust(primitive, opts)?;
+                    if let Some(len) = length {
+                        let (_, expr) = const_array_expr(primitive, &rust_type, val, *len)?;
+                        return Some((const_ty, expr));
+                    }
+                    let raw_expr = const_scalar_expr(primitive, &rust_type, val)?;
+                    return Some((const_ty, raw_expr));
+                }
+                TypeDef::Enum { encoding, .. } | TypeDef::Set { encoding, .. } => {
+                    let rust_type = primitive_to_rust(encoding, opts)?;
+                    let raw_expr = const_scalar_expr(encoding, &rust_type, val)?;
+                    return Some((field.ty.clone(), format!("{}({})", field.ty, raw_expr)));
+                }
+                TypeDef::Composite { .. } => {}
+            }
+        } else if let Some(rust_type) = primitive_to_rust(&field.ty, opts) {
+            let raw_expr = const_scalar_expr(&field.ty, &rust_type, val)?;
+            return Some((const_ty, raw_expr));
+        }
     }
 
     if let Some(TypeDef::Primitive {

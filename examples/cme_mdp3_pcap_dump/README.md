@@ -28,3 +28,6 @@ Optional filters:
 
 - Generated decoders are written to `examples/cme_mdp3_pcap_dump/src/generated` at build time.
 - The example currently handles templates 30, 47, 48, 51, 53, and 59 (plus 4 and 12).
+- The example test suite also covers constant-field correctness and
+  repeating-group decoding when runtime `blockLength` is shorter than the
+  compiled entry struct size.

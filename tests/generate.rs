@@ -257,3 +257,26 @@ fn constant_fields_are_not_writable_in_builder_or_encoder() {
     assert!(msg_rs.contains("#[inline]\n    pub fn customer_flow(&self) -> ClientFlowType"));
     assert!(msg_rs.contains("pub const CUSTOMER_FLOW: ClientFlowType"));
 }
+
+#[test]
+fn field_level_constant_literals_are_not_encoded() {
+    let xml = r#"
+        <messageSchema package="test">
+            <message name="ConstLiteral" id="1" blockLength="4">
+                <field name="mode" id="1" type="uint8" presence="constant">7</field>
+                <field name="seq" id="2" type="uint32" offset="0" />
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let msg_rs = module_map
+        .get("const_literal.rs")
+        .expect("const_literal.rs emitted");
+    assert!(!msg_rs.contains("pub mode:"));
+    assert!(!msg_rs.contains("pub fn mode(&mut self, value:"));
+    assert!(msg_rs.contains("pub const MODE: u8 = 7;"));
+    assert!(msg_rs.contains("#[inline]\n    pub fn mode(&self) -> u8"));
+    assert!(msg_rs.contains("pub const BLOCK_LENGTH: u16 = 4"));
+}

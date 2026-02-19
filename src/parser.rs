@@ -171,6 +171,8 @@ pub struct Field {
     pub semantic_type: Option<String>,
     /// The valueRef attribute if present (constants).
     pub value_ref: Option<String>,
+    /// Constant literal from field text content when present.
+    pub constant: Option<String>,
     /// Description attribute if present.
     pub description: Option<String>,
 }
@@ -421,6 +423,10 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                             let since_version = attr_opt_u32(&f, "sinceVersion", &fname)?;
                             let semantic_type = f.attribute("semanticType").map(|s| s.to_string());
                             let value_ref = f.attribute("valueRef").map(|s| s.to_string());
+                            let constant = f
+                                .text()
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty());
                             members.push(MessageMember::Field(Field {
                                 name: fname,
                                 id: fid,
@@ -435,6 +441,7 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                 since_version,
                                 semantic_type,
                                 value_ref,
+                                constant,
                                 description: f.attribute("description").map(|s| s.to_string()),
                             }));
                         }
@@ -527,6 +534,10 @@ fn parse_group(node: &roxmltree::Node, parent_name: &str) -> Result<Group, Parse
                 let byte_order = child.attribute("byteOrder").map(|s| s.to_string());
                 let presence = child.attribute("presence").map(|s| s.to_string());
                 let value_ref = child.attribute("valueRef").map(|s| s.to_string());
+                let constant = child
+                    .text()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
                 members.push(GroupMember::Field(Field {
                     name: fname.clone(),
                     id: fid,
@@ -541,6 +552,7 @@ fn parse_group(node: &roxmltree::Node, parent_name: &str) -> Result<Group, Parse
                     since_version: attr_opt_u32(&child, "sinceVersion", &fname)?,
                     semantic_type: child.attribute("semanticType").map(|s| s.to_string()),
                     value_ref,
+                    constant,
                     description: child.attribute("description").map(|s| s.to_string()),
                 }));
             }

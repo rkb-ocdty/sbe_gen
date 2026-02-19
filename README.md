@@ -39,6 +39,10 @@ code generation for other languages.
 * **Optional fields:** `presence="optional"` fields stay zero‑copy but
   gain `<field>_opt()` accessors that return `Option` based on the SBE
   null value for that primitive.
+* **Constant field correctness:** `presence="constant"` fields are
+  treated as non-encoded wire data. Generated code exposes associated
+  constants plus constant accessors, and builders/encoders do not emit
+  writes for those fields.
 * **Schema reflection:** Generated code surfaces `SINCE_VERSION`,
   `SEMANTIC_TYPE`, field offsets and constraint constants so you can
   reason about compatibility at the call site.
@@ -327,10 +331,12 @@ along with the standard message header and byte‑order rules.  Notable
 spec features that are still missing:
 * **Optional composites** are treated as required; optional handling is
   only emitted for primitives, enums and sets.
-* **Acting version awareness** is not implemented; parsing assumes the
-  current schema version and declared block lengths.
-* **Value constraints** (min/max/null/initial) are emitted as constants
-  but are not enforced at runtime.
+* **Group-entry versioning** currently uses block-length based presence
+  checks for fixed fields in entry views; explicit entry-level
+  `sinceVersion` gating is not emitted yet.
+* **Value constraints** for builders/encoders are enforced via `assert!`
+  checks and therefore panic on violation (rather than returning
+  recoverable validation errors).
 * **Constant fields** remain `const` definitions rather than struct
   members.
 

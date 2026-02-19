@@ -89,6 +89,16 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
             assert_eq!(group.count(), 1);
             let mut it = group.iter();
             let leg = it.next().expect("first leg");
+            assert!(leg.has_leg_security_id());
+            assert!(leg.has_leg_ratio_qty());
+            assert!(leg.has_leg_side());
+            assert!(leg.has_leg_price());
+            assert!(leg.has_leg_security_id_source());
+            assert_eq!(leg.leg_security_id().expect("leg security id").get(), 11);
+            assert_eq!(leg.leg_ratio_qty().expect("leg ratio qty").get(), 22);
+            assert_eq!(leg.leg_side().expect("leg side"), &3u8);
+            assert_eq!(leg.leg_price().expect("leg price").get(), 44);
+            assert_eq!(leg.leg_security_id_source(), Some([b'8']));
             assert_eq!(leg.body.leg_security_id.get(), 11);
             assert_eq!(leg.body.leg_ratio_qty.get(), 22);
             assert_eq!(leg.body.leg_side, 3);
@@ -96,6 +106,31 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
             assert_eq!(leg.body.leg_security_id_source(), [b'8']);
             assert!(it.next().is_none());
             assert!(it.remainder().is_empty());
+
+            let mut short_no_legs_bytes = Vec::new();
+            short_no_legs_bytes.extend_from_slice(&17u16.to_le_bytes());
+            short_no_legs_bytes.extend_from_slice(&1u16.to_le_bytes());
+            let mut short_entry = [0u8; 17];
+            short_entry[0..8].copy_from_slice(&111u64.to_le_bytes());
+            short_entry[8..16].copy_from_slice(&222u64.to_le_bytes());
+            short_entry[16] = 4;
+            short_no_legs_bytes.extend_from_slice(&short_entry);
+
+            let short_group = parse_no_legs(&short_no_legs_bytes).expect("parse short no_legs");
+            let mut short_it = short_group.iter();
+            let short_leg = short_it.next().expect("first short leg");
+            assert!(short_leg.has_leg_security_id());
+            assert!(short_leg.has_leg_ratio_qty());
+            assert!(short_leg.has_leg_side());
+            assert!(!short_leg.has_leg_price());
+            assert!(short_leg.leg_price().is_none());
+            assert_eq!(
+                short_leg.leg_security_id().expect("short leg security id").get(),
+                111
+            );
+            assert_eq!(short_leg.leg_security_id_source(), Some([b'8']));
+            assert!(short_it.next().is_none());
+            assert!(short_it.remainder().is_empty());
 
             assert_eq!(
                 core::mem::size_of::<PartyDetailsDefinitionRequestAck519>(),

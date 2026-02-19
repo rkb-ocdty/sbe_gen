@@ -581,6 +581,14 @@ fn instrument_definition_spread56_no_legs_parses_when_group_block_length_is_shor
 
     let mut it = group.iter();
     let first = it.next().expect("first leg");
+    assert!(first.has_leg_security_id());
+    assert!(first.has_leg_ratio_qty());
+    assert!(first.has_leg_price());
+    assert!(!first.has_leg_option_delta());
+    assert_eq!(first.leg_security_id().expect("leg security id").get(), 123);
+    assert_eq!(first.leg_ratio_qty().expect("leg ratio qty"), &7i8);
+    assert!(first.leg_option_delta().is_none());
+    assert_eq!(first.leg_security_id_source(), Some([56u8]));
     assert_eq!(first.body.leg_security_id.get(), 123);
     assert_eq!(first.body.leg_side.0, 1);
     assert_eq!(first.body.leg_ratio_qty, 7);

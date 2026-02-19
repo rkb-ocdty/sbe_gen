@@ -241,9 +241,20 @@ pub struct LevelsEntry {
     pub qty: I64,
 }
 
+pub enum LevelsEntryBody<'a> {
+    Borrowed(&'a LevelsEntry, &'a [u8]),
+    Owned(Vec<u8>),
+}
+
 pub struct LevelsEntryView<'a> {
-    pub body: &'a LevelsEntry,
+    pub body: LevelsEntryBody<'a>,
+    pub acting_block_length: usize,
     pub note: VarData<'a>,
+}
+
+impl<'a> LevelsEntryView<'a> {
+    pub fn has_price(&self) -> bool { /* ... */ }
+    pub fn price(&self) -> Option<&I64> { /* ... */ }
 }
 
 pub struct BookBuilder { /* ... */ }
@@ -261,8 +272,9 @@ let levels = crate::sbe::book::parse_levels(rest).expect("levels");
 
 let mut iter = levels.iter();
 while let Some(level) = iter.next() {
-    let price = level.body.price.get();
+    let price = level.body.price.get(); // deref-friendly path
     let qty = level.body.qty.get();
+    let safe_price = level.price().map(|p| p.get()); // blockLength-safe path
     let note = level.note.as_str();
 }
 
@@ -305,5 +317,24 @@ let (hdr, body) = MessageHeader::parse_prefix(frame).expect("header");
 let (view, rest) = crate::sbe::book::parse_with_header(body, &hdr).expect("book");
 if view.has_seq() {
     let seq = view.seq().map(|v| v.get());
+}
+```
+
+## Constant fields
+
+SBE constant fields are not encoded on the wire. Generated code reflects
+that by:
+
+- excluding constant fields from `#[repr(C)]` message/group-entry structs,
+- exposing associated constants and constant accessors,
+- skipping constant setters in builders/encoders.
+
+Example shape:
+
+```rust
+impl SomeMessage {
+    pub const SECURITY_ID_SOURCE: SecurityIDSource = [b'8'];
+    #[inline]
+    pub fn security_id_source(&self) -> SecurityIDSource { Self::SECURITY_ID_SOURCE }
 }
 ```

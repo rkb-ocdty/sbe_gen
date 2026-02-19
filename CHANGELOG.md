@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added
+- Generated constant fields now expose both associated constants and `#[inline]` constant accessors on messages and group entries.
+- Added field-level constant literal support (`<field presence="constant">...</field>`) in the parser and generator.
+- Added group-entry view accessors (`has_*` / getter methods) that honor runtime entry `blockLength` bounds.
+- Added regression coverage for:
+  - constant-field wire-layout drift cases (including shifted offsets and group block-length mismatches),
+  - dimension composites using `<ref>` members for `blockLength`/`numInGroup`,
+  - CME MDP3 example cases with constants and short group `blockLength`.
+
+### Changed
+- Constant fields are now fully treated as non-encoded wire data:
+  - excluded from `#[repr(C)]` wire struct layout,
+  - excluded from builder/encoder writable setters,
+  - excluded from encoded-size assumptions.
+- Message view accessors now generate `#[inline]` `has_*` and getter methods, including constant-field version-aware access in `parse_with_header` views.
+- Group iterators now parse entries with a block-length-safe borrowed/owned path instead of relying on direct `parse_prefix` over raw entry slices.
+- Dimension-type field detection for repeating groups now supports both `<type>` and `<ref>` members and uses stronger name normalization/fallbacks.
+
+### Documentation
+- Updated `README.md`, `docs/USAGE.md`, and `examples/cme_mdp3_pcap_dump/README.md` to match current constant-field and group-entry semantics.
+
 ## 0.5.0
 
 ### Added
