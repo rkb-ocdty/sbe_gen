@@ -260,8 +260,8 @@ let (book, rest) = Book::parse_prefix(bytes).expect("prefix");
 // Parse the Levels group
 let levels = parse_levels(rest).expect("levels header");
 for level in levels.iter() {
-    let price = level.body.price;
-    let qty = level.body.qty;
+    let price = level.price().map(|v| v.get());
+    let qty = level.qty().map(|v| v.get());
     let note = level.note.as_str();
 }
 let after_levels = levels.iter().remainder();
@@ -270,6 +270,37 @@ let after_levels = levels.iter().remainder();
 let (raw, tail) = book.parse_raw(after_levels).expect("raw data");
 let raw_str = raw.as_str();
 ```
+
+### Fast path for fixed schema/version
+
+Default decode should use `has_*` + accessor methods because that path is
+safe across schema evolution (shorter `acting_block_length`, older
+`acting_version`, constant fields, etc.).
+
+If your producer schema/version is pinned and fixed, you can guard once and
+then read `view.body` directly to avoid per-field presence checks:
+
+```rust
+let (hdr, body) = MessageHeader::parse_prefix(frame).expect("header");
+let (view, rest) = sbe::book::parse_with_header(body, &hdr).expect("book");
+assert!(rest.is_empty());
+
+// Safe-by-default, schema-evolution path.
+let seq = view.seq().map(|v| v.get());
+
+// Optional fast path for fixed layout streams.
+let fixed_layout = view.acting_version >= Book::SCHEMA_VERSION
+    && view.acting_block_length >= core::mem::size_of::<Book>();
+if fixed_layout {
+    let msg = &*view.body;
+    let seq_fast = msg.seq.get();
+    let _ = seq_fast;
+}
+```
+
+Group entries follow the same pattern: check
+`entry.acting_block_length >= size_of::<Entry>()` before using
+`&*entry.body` directly.
 
 ### Encoding with builders
 

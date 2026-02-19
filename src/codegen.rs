@@ -739,6 +739,9 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     code.push_str(
         "fn write_bytes_into<T: IntoBytes + Immutable>(dst: &mut [u8], offset: usize, value: &T) -> Result<(), EncodeIntoError> {\n    let bytes = value.as_bytes();\n    let end = offset.checked_add(bytes.len()).ok_or(EncodeIntoError::InvalidState(\"fixed field offset overflow\"))?;\n    if end > dst.len() { return Err(EncodeIntoError::BufferTooSmall { required: end, available: dst.len() }); }\n    dst[offset..end].copy_from_slice(bytes);\n    Ok(())\n}\n\n",
     );
+    code.push_str(
+        "fn write_bytes_into_in_bounds<T: IntoBytes + Immutable>(dst: &mut [u8], offset: usize, value: &T) {\n    let bytes = value.as_bytes();\n    let end = offset + bytes.len();\n    debug_assert!(end <= dst.len(), \"fixed field write in bounds\");\n    dst[offset..end].copy_from_slice(bytes);\n}\n\n",
+    );
     // struct definition
     code.push_str("#[repr(C)]\n");
     code.push_str(
@@ -894,32 +897,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
                     raw_expr_for_value(field, "value", schema, opts),
                 ) {
                     code.push_str(&format!("    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let raw: {host} = {raw};\n", name = field_name, param = param_ty, host = host_ty, raw = raw_expr));
-                    if let Some(ref minv) = field.min_value {
-                        code.push_str(&format!(
-                            "        let min: {host} = \"{minv}\".parse().expect(\"minValue parse\");\n        assert!(raw >= min, \"{field} below minValue\");\n",
-                            host = host_ty,
-                            minv = minv,
-                            field = field.name
-                        ));
-                    }
-                    if let Some(ref maxv) = field.max_value {
-                        code.push_str(&format!(
-                            "        let max: {host} = \"{maxv}\".parse().expect(\"maxValue parse\");\n        assert!(raw <= max, \"{field} above maxValue\");\n",
-                            host = host_ty,
-                            maxv = maxv,
-                            field = field.name
-                        ));
-                    }
-                    if field.presence.as_deref() != Some("optional")
-                        && let Some(ref nullv) = field.null_value
-                    {
-                        code.push_str(&format!(
-                                "        let null_val: {host} = \"{nullv}\".parse().expect(\"nullValue parse\");\n        assert!(raw != null_val, \"{field} uses nullValue but field is required\");\n",
-                                host = host_ty,
-                                nullv = nullv,
-                                field = field.name
-                            ));
-                    }
+                    push_validation_asserts(&mut code, field, schema, &host_ty);
                     code.push_str(&format!(
                         "        let encoded = {expr};\n        write_bytes_at(&mut self.buf, {offset}usize, &encoded);\n        self\n    }}\n",
                         expr = encoded_expr,
@@ -1008,40 +986,15 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
                     raw_expr_for_value(field, "value", schema, opts),
                 ) {
                     code.push_str(&format!("    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let raw: {host} = {raw};\n", name = field_name, param = param_ty, host = host_ty, raw = raw_expr));
-                    if let Some(ref minv) = field.min_value {
-                        code.push_str(&format!(
-                            "        let min: {host} = \"{minv}\".parse().expect(\"minValue parse\");\n        assert!(raw >= min, \"{field} below minValue\");\n",
-                            host = host_ty,
-                            minv = minv,
-                            field = field.name
-                        ));
-                    }
-                    if let Some(ref maxv) = field.max_value {
-                        code.push_str(&format!(
-                            "        let max: {host} = \"{maxv}\".parse().expect(\"maxValue parse\");\n        assert!(raw <= max, \"{field} above maxValue\");\n",
-                            host = host_ty,
-                            maxv = maxv,
-                            field = field.name
-                        ));
-                    }
-                    if field.presence.as_deref() != Some("optional")
-                        && let Some(ref nullv) = field.null_value
-                    {
-                        code.push_str(&format!(
-                                "        let null_val: {host} = \"{nullv}\".parse().expect(\"nullValue parse\");\n        assert!(raw != null_val, \"{field} uses nullValue but field is required\");\n",
-                                host = host_ty,
-                                nullv = nullv,
-                                field = field.name
-                            ));
-                    }
+                    push_validation_asserts(&mut code, field, schema, &host_ty);
                     code.push_str(&format!(
-                        "        let encoded = {expr};\n        write_bytes_into(self.buf, {offset}usize, &encoded).expect(\"fixed field write in bounds\");\n        self\n    }}\n",
+                        "        let encoded = {expr};\n        write_bytes_into_in_bounds(self.buf, {offset}usize, &encoded);\n        self\n    }}\n",
                         expr = encoded_expr,
                         offset = offset
                     ));
                 } else {
                     code.push_str(&format!(
-                        "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_into(self.buf, {offset}usize, &encoded).expect(\"fixed field write in bounds\");\n        self\n    }}\n",
+                        "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_into_in_bounds(self.buf, {offset}usize, &encoded);\n        self\n    }}\n",
                         name = field_name,
                         param = param_ty,
                         expr = encoded_expr,
@@ -1050,7 +1003,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
                 }
             } else {
                 code.push_str(&format!(
-                    "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_into(self.buf, {offset}usize, &encoded).expect(\"fixed field write in bounds\");\n        self\n    }}\n",
+                    "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_into_in_bounds(self.buf, {offset}usize, &encoded);\n        self\n    }}\n",
                     name = field_name,
                     param = param_ty,
                     expr = encoded_expr,
@@ -1095,16 +1048,16 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
     }
     // acting version aware view
     code.push_str(&format!(
-        "#[derive(Debug, Clone, Copy)]\npub struct {}Body<'a> {{\n    raw: &'a [u8],\n}}\n\n",
-        msg.name
+        "#[derive(Debug, Clone, Copy)]\npub struct {}Body<'a> {{\n    parsed: Option<&'a {}>,\n    raw: &'a [u8],\n}}\n\n",
+        msg.name, msg.name
     ));
     code.push_str(&format!(
-        "impl<'a> core::ops::Deref for {}Body<'a> {{\n    type Target = {};\n    fn deref(&self) -> &Self::Target {{\n        let (msg, _) = Ref::<_, {}>::from_prefix(self.raw)\n            .expect(\"message body shorter than current layout; use accessor methods\");\n        Ref::into_ref(msg)\n    }}\n}}\n\n",
-        msg.name, msg.name, msg.name
+        "impl<'a> core::ops::Deref for {}Body<'a> {{\n    type Target = {};\n    fn deref(&self) -> &Self::Target {{\n        self.parsed.expect(\"message body shorter than current layout; use accessor methods\")\n    }}\n}}\n\n",
+        msg.name, msg.name
     ));
     code.push_str(&format!(
-        "impl<'a> {}Body<'a> {{\n    fn bytes(&self) -> &[u8] {{\n        self.raw\n    }}\n}}\n\n",
-        msg.name
+        "impl<'a> {}Body<'a> {{\n    fn parsed(&self) -> Option<&'a {}> {{\n        self.parsed\n    }}\n    fn bytes(&self) -> &[u8] {{\n        self.raw\n    }}\n}}\n\n",
+        msg.name, msg.name
     ));
     code.push_str(&format!(
         "#[derive(Debug, Clone)]\npub struct {}View<'a> {{\n    pub body: {}Body<'a>,\n    pub acting_block_length: usize,\n    pub acting_version: u16,\n}}\n\n",
@@ -1146,8 +1099,9 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
         ));
         if let Some(resolved) = resolve_type(&field.ty, schema, opts, field.byte_order.as_deref()) {
             code.push_str(&format!(
-                "    #[inline]\n    pub fn {fname}(&self) -> Option<&{ty}> {{\n        if !self.has_{fname}() {{ return None; }}\n        let bytes = &self.body.bytes()[{offset}..{offset_plus}];\n        let (r, _) = Ref::<_, {ty}>::from_prefix(bytes).ok()?;\n        Some(Ref::into_ref(r))\n    }}\n",
+                "    #[inline]\n    pub fn {fname}(&self) -> Option<&{ty}> {{\n        if !self.has_{fname}() {{ return None; }}\n        if let Some(msg) = self.body.parsed() {{ return Some(&msg.{field_name}); }}\n        let bytes = &self.body.bytes()[{offset}..{offset_plus}];\n        let (r, _) = Ref::<_, {ty}>::from_prefix(bytes).ok()?;\n        Some(Ref::into_ref(r))\n    }}\n",
                 fname = fname,
+                field_name = fname,
                 ty = resolved,
                 offset = layout.offset,
                 offset_plus = layout.offset + layout.size
@@ -1167,7 +1121,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
     }
     code.push_str("}\n\n");
     code.push_str(&format!(
-        "pub fn parse_with_header<'a>(body: &'a [u8], header: &MessageHeader) -> Option<({name}View<'a>, &'a [u8])> {{\n    let mut acting_block_length = header.block_length.get() as usize;\n    if acting_block_length == 0 {{ acting_block_length = {name}::BLOCK_LENGTH as usize; }}\n    let acting_version = header.version.get();\n    if body.len() < acting_block_length {{ return None; }}\n    let needed = core::mem::size_of::<{name}>();\n    let (prefix, rest) = body.split_at(acting_block_length);\n    let raw = if acting_block_length >= needed {{\n        &prefix[..needed]\n    }} else {{\n        prefix\n    }};\n    let view = {name}View {{ body: {name}Body {{ raw }}, acting_block_length, acting_version }};\n    Some((view, rest))\n}}\n",
+        "pub fn parse_with_header<'a>(body: &'a [u8], header: &MessageHeader) -> Option<({name}View<'a>, &'a [u8])> {{\n    let mut acting_block_length = header.block_length.get() as usize;\n    if acting_block_length == 0 {{ acting_block_length = {name}::BLOCK_LENGTH as usize; }}\n    let acting_version = header.version.get();\n    if body.len() < acting_block_length {{ return None; }}\n    let needed = core::mem::size_of::<{name}>();\n    let (prefix, rest) = body.split_at(acting_block_length);\n    let (parsed, raw) = if acting_block_length >= needed {{\n        let raw = &prefix[..needed];\n        let (msg, _) = Ref::<_, {name}>::from_prefix(raw).ok()?;\n        (Some(Ref::into_ref(msg)), raw)\n    }} else {{\n        (None, prefix)\n    }};\n    let view = {name}View {{ body: {name}Body {{ parsed, raw }}, acting_block_length, acting_version }};\n    Some((view, rest))\n}}\n",
         name = msg.name
     ));
     code
@@ -1696,16 +1650,16 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     ));
 
     code.push_str(&format!(
-        "#[derive(Debug, Clone, Copy)]\npub struct {}<'a> {{\n    raw: &'a [u8],\n}}\n\n",
-        entry_body
+        "#[derive(Debug, Clone, Copy)]\npub struct {}<'a> {{\n    parsed: Option<&'a {}>,\n    raw: &'a [u8],\n}}\n\n",
+        entry_body, entry_struct
     ));
     code.push_str(&format!(
-        "impl<'a> core::ops::Deref for {}<'a> {{\n    type Target = {};\n    fn deref(&self) -> &Self::Target {{\n        let (entry, _) = Ref::<_, {}>::from_prefix(self.raw)\n            .expect(\"group entry shorter than current layout; use accessor methods\");\n        Ref::into_ref(entry)\n    }}\n}}\n\n",
-        entry_body, entry_struct, entry_struct
+        "impl<'a> core::ops::Deref for {}<'a> {{\n    type Target = {};\n    fn deref(&self) -> &Self::Target {{\n        self.parsed.expect(\"group entry shorter than current layout; use accessor methods\")\n    }}\n}}\n\n",
+        entry_body, entry_struct
     ));
     code.push_str(&format!(
-        "impl<'a> {}<'a> {{\n    fn bytes(&self) -> &[u8] {{\n        self.raw\n    }}\n}}\n\n",
-        entry_body
+        "impl<'a> {}<'a> {{\n    fn parsed(&self) -> Option<&'a {}> {{\n        self.parsed\n    }}\n    fn bytes(&self) -> &[u8] {{\n        self.raw\n    }}\n}}\n\n",
+        entry_body, entry_struct
     ));
     code.push_str(&format!(
         "#[derive(Debug, Clone)]\npub struct {}<'a> {{\n    pub body: {}<'a>,\n    pub acting_block_length: usize,\n",
@@ -1741,7 +1695,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     code.push_str(PARSE_PREFIX_METHOD);
     code.push_str("}\n\n");
     code.push_str(&format!(
-        "fn {parse_fn}<'a>(entry: &'a [u8], block_length: usize) -> Option<{entry_body}<'a>> {{\n    if entry.len() < block_length {{ return None; }}\n    let needed = core::mem::size_of::<{entry_struct}>();\n    let raw = if block_length >= needed {{\n        &entry[..needed]\n    }} else {{\n        &entry[..block_length]\n    }};\n    Some({entry_body} {{ raw }})\n}}\n\n",
+        "fn {parse_fn}<'a>(entry: &'a [u8], block_length: usize) -> Option<{entry_body}<'a>> {{\n    if entry.len() < block_length {{ return None; }}\n    let needed = core::mem::size_of::<{entry_struct}>();\n    let (parsed, raw) = if block_length >= needed {{\n        let raw = &entry[..needed];\n        let (body, _) = Ref::<_, {entry_struct}>::from_prefix(raw).ok()?;\n        (Some(Ref::into_ref(body)), raw)\n    }} else {{\n        (None, &entry[..block_length])\n    }};\n    Some({entry_body} {{ parsed, raw }})\n}}\n\n",
         parse_fn = parse_entry_body_fn,
         entry_body = entry_body,
         entry_struct = entry_struct
@@ -1783,8 +1737,9 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
                 resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
             {
                 code.push_str(&format!(
-                    "    #[inline]\n    pub fn {fname}(&self) -> Option<&{ty}> {{\n        if !self.has_{fname}() {{ return None; }}\n        let bytes = &self.body.bytes()[{offset}..{offset_plus}];\n        let (r, _) = Ref::<_, {ty}>::from_prefix(bytes).ok()?;\n        Some(Ref::into_ref(r))\n    }}\n",
+                    "    #[inline]\n    pub fn {fname}(&self) -> Option<&{ty}> {{\n        if !self.has_{fname}() {{ return None; }}\n        if let Some(entry) = self.body.parsed() {{ return Some(&entry.{field_name}); }}\n        let bytes = &self.body.bytes()[{offset}..{offset_plus}];\n        let (r, _) = Ref::<_, {ty}>::from_prefix(bytes).ok()?;\n        Some(Ref::into_ref(r))\n    }}\n",
                     fname = fname,
+                    field_name = fname,
                     ty = resolved,
                     offset = layout.offset,
                     offset_plus = layout.offset + layout.size
@@ -1877,32 +1832,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
                     raw_expr_for_value(field, "value", schema, opts),
                 ) {
                     code.push_str(&format!("    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let raw: {host} = {raw};\n", name = field.name.to_snake_case(), param = param_ty, host = host_ty, raw = raw_expr));
-                    if let Some(ref minv) = field.min_value {
-                        code.push_str(&format!(
-                            "        let min: {host} = \"{minv}\".parse().expect(\"minValue parse\");\n        assert!(raw >= min, \"{field} below minValue\");\n",
-                            host = host_ty,
-                            minv = minv,
-                            field = field.name
-                        ));
-                    }
-                    if let Some(ref maxv) = field.max_value {
-                        code.push_str(&format!(
-                            "        let max: {host} = \"{maxv}\".parse().expect(\"maxValue parse\");\n        assert!(raw <= max, \"{field} above maxValue\");\n",
-                            host = host_ty,
-                            maxv = maxv,
-                            field = field.name
-                        ));
-                    }
-                    if field.presence.as_deref() != Some("optional")
-                        && let Some(ref nullv) = field.null_value
-                    {
-                        code.push_str(&format!(
-                                "        let null_val: {host} = \"{nullv}\".parse().expect(\"nullValue parse\");\n        assert!(raw != null_val, \"{field} uses nullValue but field is required\");\n",
-                                host = host_ty,
-                                nullv = nullv,
-                                field = field.name
-                            ));
-                    }
+                    push_validation_asserts(code, field, schema, &host_ty);
                     code.push_str(&format!(
                         "        let encoded = {expr};\n        write_bytes_at(self.buf, self.start + {offset}usize, &encoded);\n        self\n    }}\n",
                         expr = encoded_expr,
@@ -2010,40 +1940,15 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
                     raw_expr_for_value(field, "value", schema, opts),
                 ) {
                     code.push_str(&format!("    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let raw: {host} = {raw};\n", name = field.name.to_snake_case(), param = param_ty, host = host_ty, raw = raw_expr));
-                    if let Some(ref minv) = field.min_value {
-                        code.push_str(&format!(
-                            "        let min: {host} = \"{minv}\".parse().expect(\"minValue parse\");\n        assert!(raw >= min, \"{field} below minValue\");\n",
-                            host = host_ty,
-                            minv = minv,
-                            field = field.name
-                        ));
-                    }
-                    if let Some(ref maxv) = field.max_value {
-                        code.push_str(&format!(
-                            "        let max: {host} = \"{maxv}\".parse().expect(\"maxValue parse\");\n        assert!(raw <= max, \"{field} above maxValue\");\n",
-                            host = host_ty,
-                            maxv = maxv,
-                            field = field.name
-                        ));
-                    }
-                    if field.presence.as_deref() != Some("optional")
-                        && let Some(ref nullv) = field.null_value
-                    {
-                        code.push_str(&format!(
-                                "        let null_val: {host} = \"{nullv}\".parse().expect(\"nullValue parse\");\n        assert!(raw != null_val, \"{field} uses nullValue but field is required\");\n",
-                                host = host_ty,
-                                nullv = nullv,
-                                field = field.name
-                            ));
-                    }
+                    push_validation_asserts(code, field, schema, &host_ty);
                     code.push_str(&format!(
-                        "        let encoded = {expr};\n        write_bytes_into(self.buf, self.start + {offset}usize, &encoded).expect(\"group fixed field write in bounds\");\n        self\n    }}\n",
+                        "        let encoded = {expr};\n        write_bytes_into_in_bounds(self.buf, self.start + {offset}usize, &encoded);\n        self\n    }}\n",
                         expr = encoded_expr,
                         offset = offset
                     ));
                 } else {
                     code.push_str(&format!(
-                        "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_into(self.buf, self.start + {offset}usize, &encoded).expect(\"group fixed field write in bounds\");\n        self\n    }}\n",
+                        "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_into_in_bounds(self.buf, self.start + {offset}usize, &encoded);\n        self\n    }}\n",
                         name = field.name.to_snake_case(),
                         param = param_ty,
                         expr = encoded_expr,
@@ -2052,7 +1957,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
                 }
             } else {
                 code.push_str(&format!(
-                    "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_into(self.buf, self.start + {offset}usize, &encoded).expect(\"group fixed field write in bounds\");\n        self\n    }}\n",
+                    "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_into_in_bounds(self.buf, self.start + {offset}usize, &encoded);\n        self\n    }}\n",
                     name = field.name.to_snake_case(),
                     param = param_ty,
                     expr = encoded_expr,
@@ -2637,6 +2542,68 @@ fn null_cond_for_primitive(
 
     let expr = const_host_expr(prim, raw)?;
     Some(format!("raw == {}", expr))
+}
+
+fn validation_literal_expr(field: &Field, schema: &Schema, raw: &str) -> Option<String> {
+    let prim = field_primitive(field, schema)?;
+    const_host_expr(&prim, raw)
+}
+
+fn push_validation_asserts(code: &mut String, field: &Field, schema: &Schema, host_ty: &str) {
+    if let Some(ref minv) = field.min_value {
+        if let Some(min_expr) = validation_literal_expr(field, schema, minv) {
+            code.push_str(&format!(
+                "        let min: {host} = {min_expr};\n        assert!(raw >= min, \"{field} below minValue\");\n",
+                host = host_ty,
+                min_expr = min_expr,
+                field = field.name
+            ));
+        } else {
+            code.push_str(&format!(
+                "        let min: {host} = \"{minv}\".parse().expect(\"minValue parse\");\n        assert!(raw >= min, \"{field} below minValue\");\n",
+                host = host_ty,
+                minv = minv,
+                field = field.name
+            ));
+        }
+    }
+    if let Some(ref maxv) = field.max_value {
+        if let Some(max_expr) = validation_literal_expr(field, schema, maxv) {
+            code.push_str(&format!(
+                "        let max: {host} = {max_expr};\n        assert!(raw <= max, \"{field} above maxValue\");\n",
+                host = host_ty,
+                max_expr = max_expr,
+                field = field.name
+            ));
+        } else {
+            code.push_str(&format!(
+                "        let max: {host} = \"{maxv}\".parse().expect(\"maxValue parse\");\n        assert!(raw <= max, \"{field} above maxValue\");\n",
+                host = host_ty,
+                maxv = maxv,
+                field = field.name
+            ));
+        }
+    }
+    if field.presence.as_deref() != Some("optional")
+        && let Some(ref nullv) = field.null_value
+    {
+        let cond = field_primitive(field, schema)
+            .and_then(|prim| null_cond_for_primitive(&prim, host_ty, Some(nullv), false));
+        if let Some(cond) = cond {
+            code.push_str(&format!(
+                "        assert!(!({cond}), \"{field} uses nullValue but field is required\");\n",
+                cond = cond,
+                field = field.name
+            ));
+        } else {
+            code.push_str(&format!(
+                "        let null_val: {host} = \"{nullv}\".parse().expect(\"nullValue parse\");\n        assert!(raw != null_val, \"{field} uses nullValue but field is required\");\n",
+                host = host_ty,
+                nullv = nullv,
+                field = field.name
+            ));
+        }
+    }
 }
 
 fn optional_methods_for_fields(

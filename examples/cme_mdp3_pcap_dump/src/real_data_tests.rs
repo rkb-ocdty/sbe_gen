@@ -101,16 +101,21 @@ fn template_30_security_status() {
     let (view, tail) = security_status::parse_with_header(body, &msg_hdr).expect("parse");
     assert!(tail.is_empty());
 
-    let msg = view.body;
-    assert_eq!(msg.transact_time.get(), 1_689_544_800_000_000_000);
-    assert_eq!(msg.security_group, [b'E', b'S', 0, 0, 0, 0]);
-    assert_eq!(msg.asset, [0u8; 6]);
-    assert_eq!(msg.security_id.get(), i32::MAX);
-    assert_eq!(msg.trade_date.get(), 19_555);
-    assert_eq!(msg.match_event_indicator.0, 0);
-    assert_eq!(msg.security_trading_status.0, 15);
-    assert_eq!(msg.halt_reason.0, 0);
-    assert_eq!(msg.security_trading_event.0, 0);
+    assert_eq!(
+        view.transact_time().expect("transact_time").get(),
+        1_689_544_800_000_000_000
+    );
+    assert_eq!(
+        view.security_group().expect("security_group"),
+        &[b'E', b'S', 0, 0, 0, 0]
+    );
+    assert_eq!(view.asset().expect("asset"), &[0u8; 6]);
+    assert_eq!(view.security_id().expect("security_id").get(), i32::MAX);
+    assert_eq!(view.trade_date().expect("trade_date").get(), 19_555);
+    assert_eq!(view.body.match_event_indicator.0, 0);
+    assert_eq!(view.body.security_trading_status.0, 15);
+    assert_eq!(view.body.halt_reason.0, 0);
+    assert_eq!(view.body.security_trading_event.0, 0);
 }
 
 #[test]
@@ -121,7 +126,10 @@ fn template_47_incremental_order_book() {
     assert_eq!(pkt_hdr.sending_time.get(), 1_689_544_800_021_030_601);
 
     let (view, after_fixed) = inc_book::parse_with_header(body, &msg_hdr).expect("parse");
-    assert_eq!(view.body.transact_time.get(), 1_689_544_800_000_000_000);
+    assert_eq!(
+        view.transact_time().expect("transact_time").get(),
+        1_689_544_800_000_000_000
+    );
     assert_eq!(view.body.match_event_indicator.0, 0);
 
     let entries = inc_book::parse_no_md_entries(after_fixed).expect("entries");
@@ -129,14 +137,19 @@ fn template_47_incremental_order_book() {
     assert_eq!(entries.header.block_length.get(), 40);
 
     let first = entries.iter().next().expect("first entry");
-    let body = first.body;
-    assert_eq!(body.order_id.get(), 6_412_148_621_783);
-    assert_eq!(body.md_order_priority.get(), 15_098_154_137);
-    assert_eq!(body.md_entry_px.mantissa.get(), 455_450_000_000_000);
-    assert_eq!(body.md_display_qty.get(), 1);
-    assert_eq!(body.security_id.get(), 3_445);
-    assert_eq!(body.md_update_action.0, 2);
-    assert_eq!(body.md_entry_type.0, 48);
+    assert_eq!(first.order_id().expect("order_id").get(), 6_412_148_621_783);
+    assert_eq!(
+        first.md_order_priority().expect("md_order_priority").get(),
+        15_098_154_137
+    );
+    assert_eq!(
+        first.md_entry_px().expect("md_entry_px").mantissa.get(),
+        455_450_000_000_000
+    );
+    assert_eq!(first.md_display_qty().expect("md_display_qty").get(), 1);
+    assert_eq!(first.security_id().expect("security_id").get(), 3_445);
+    assert_eq!(first.body.md_update_action.0, 2);
+    assert_eq!(first.body.md_entry_type.0, 48);
 }
 
 #[test]
@@ -147,7 +160,10 @@ fn template_48_trade_summary() {
     assert_eq!(pkt_hdr.sending_time.get(), 1_689_544_800_019_788_326);
 
     let (view, after_fixed) = trade_summary::parse_with_header(body, &msg_hdr).expect("parse");
-    assert_eq!(view.body.transact_time.get(), 1_689_544_800_000_000_000);
+    assert_eq!(
+        view.transact_time().expect("transact_time").get(),
+        1_689_544_800_000_000_000
+    );
     assert_eq!(view.body.match_event_indicator.0, 1);
 
     let entries = trade_summary::parse_no_md_entries(after_fixed).expect("entries");
@@ -156,16 +172,21 @@ fn template_48_trade_summary() {
 
     let mut iter = entries.iter();
     let first = iter.next().expect("first entry");
-    let body = first.body;
-    assert_eq!(body.md_entry_px.mantissa.get(), 30_500_000_000_000);
-    assert_eq!(body.md_entry_size.get(), 2);
-    assert_eq!(body.security_id.get(), 5_785);
-    assert_eq!(body.rpt_seq.get(), 45);
-    assert_eq!(body.number_of_orders.get(), 3);
-    assert_eq!(body.aggressor_side.0, 0);
-    assert_eq!(body.md_update_action.0, 0);
+    assert_eq!(
+        first.md_entry_px().expect("md_entry_px").mantissa.get(),
+        30_500_000_000_000
+    );
+    assert_eq!(first.md_entry_size().expect("md_entry_size").get(), 2);
+    assert_eq!(first.security_id().expect("security_id").get(), 5_785);
+    assert_eq!(first.rpt_seq().expect("rpt_seq").get(), 45);
+    assert_eq!(first.number_of_orders().expect("number_of_orders").get(), 3);
+    assert_eq!(first.body.aggressor_side.0, 0);
+    assert_eq!(first.body.md_update_action.0, 0);
     assert_eq!(trade_summary::NoMDEntriesEntry::MD_ENTRY_TYPE.0, b'2');
-    assert_eq!(body.md_trade_entry_id.get(), 177);
+    assert_eq!(
+        first.md_trade_entry_id().expect("md_trade_entry_id").get(),
+        177
+    );
 
     // Consume the one entry so the remainder is at the next group.
     let after_entries = iter.remainder();
@@ -182,7 +203,10 @@ fn template_51_session_statistics() {
     assert_eq!(pkt_hdr.sending_time.get(), 1_689_544_800_096_718_729);
 
     let (view, after_fixed) = session_stats::parse_with_header(body, &msg_hdr).expect("parse");
-    assert_eq!(view.body.transact_time.get(), 1_689_544_800_087_997_437);
+    assert_eq!(
+        view.transact_time().expect("transact_time").get(),
+        1_689_544_800_087_997_437
+    );
     assert_eq!(view.body.match_event_indicator.0, 136);
 
     let entries = session_stats::parse_no_md_entries(after_fixed).expect("entries");
@@ -190,20 +214,26 @@ fn template_51_session_statistics() {
     assert_eq!(entries.header.block_length.get(), 24);
 
     let first = entries.iter().next().expect("first entry");
-    let body = first.body;
-    assert_eq!(body.md_entry_px.mantissa.get(), 875_000_000_000);
-    assert_eq!(body.security_id.get(), 4_242_033);
-    assert_eq!(body.rpt_seq.get(), 5);
-    assert_eq!(body.open_close_settl_flag.0, 255);
-    assert_eq!(body.md_update_action.0, 0);
-    assert_eq!(body.md_entry_type.0, 78);
-    assert_eq!(body.md_entry_size.get(), i32::MAX);
+    assert_eq!(
+        first.md_entry_px().expect("md_entry_px").mantissa.get(),
+        875_000_000_000
+    );
+    assert_eq!(first.security_id().expect("security_id").get(), 4_242_033);
+    assert_eq!(first.rpt_seq().expect("rpt_seq").get(), 5);
+    assert_eq!(first.body.open_close_settl_flag.0, 255);
+    assert_eq!(first.body.md_update_action.0, 0);
+    assert_eq!(first.body.md_entry_type.0, 78);
+    assert_eq!(
+        first.md_entry_size().expect("md_entry_size").get(),
+        i32::MAX
+    );
 }
 
 #[test]
 fn template_30_roundtrip() {
     rebuild_payload(TEMPLATE_30_PACKET, |msg_hdr, body| {
         let (view, _) = security_status::parse_with_header(body, msg_hdr).expect("parse");
+        // Fixture roundtrip assumes current-schema fixed layout.
         let msg = *view.body;
         msg.as_bytes()[..view.acting_block_length].to_vec()
     });
@@ -213,6 +243,7 @@ fn template_30_roundtrip() {
 fn template_47_roundtrip() {
     rebuild_payload(TEMPLATE_47_PACKET, |msg_hdr, body| {
         let (view, after_fixed) = inc_book::parse_with_header(body, msg_hdr).expect("parse");
+        // Fixture roundtrip assumes current-schema fixed layout.
         let msg = *view.body;
         let mut out = Vec::new();
         append_fixed_block(&mut out, msg.as_bytes(), view.acting_block_length);
@@ -224,6 +255,7 @@ fn template_47_roundtrip() {
             inc_book::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize,
         );
         let mut iter = entries.iter();
+        // Fixture roundtrip assumes current-schema fixed layout.
         for entry in iter.by_ref() {
             let body = *entry.body;
             append_fixed_block(&mut out, body.as_bytes(), entry_len);
@@ -238,6 +270,7 @@ fn template_47_roundtrip() {
 fn template_48_roundtrip() {
     rebuild_payload(TEMPLATE_48_PACKET, |msg_hdr, body| {
         let (view, after_fixed) = trade_summary::parse_with_header(body, msg_hdr).expect("parse");
+        // Fixture roundtrip assumes current-schema fixed layout.
         let msg = *view.body;
         let mut out = Vec::new();
         append_fixed_block(&mut out, msg.as_bytes(), view.acting_block_length);
@@ -249,6 +282,7 @@ fn template_48_roundtrip() {
             trade_summary::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize,
         );
         let mut iter = entries.iter();
+        // Fixture roundtrip assumes current-schema fixed layout.
         for entry in iter.by_ref() {
             let body = *entry.body;
             append_fixed_block(&mut out, body.as_bytes(), entry_len);
@@ -263,6 +297,7 @@ fn template_48_roundtrip() {
             trade_summary::NoOrderIDEntriesGroupBuilder::BLOCK_LENGTH as usize,
         );
         let mut order_iter = order_entries.iter();
+        // Fixture roundtrip assumes current-schema fixed layout.
         for entry in order_iter.by_ref() {
             let body = *entry.body;
             append_fixed_block(&mut out, body.as_bytes(), order_len);
@@ -277,6 +312,7 @@ fn template_48_roundtrip() {
 fn template_51_roundtrip() {
     rebuild_payload(TEMPLATE_51_PACKET, |msg_hdr, body| {
         let (view, after_fixed) = session_stats::parse_with_header(body, msg_hdr).expect("parse");
+        // Fixture roundtrip assumes current-schema fixed layout.
         let msg = *view.body;
         let mut out = Vec::new();
         append_fixed_block(&mut out, msg.as_bytes(), view.acting_block_length);
@@ -288,6 +324,7 @@ fn template_51_roundtrip() {
             session_stats::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize,
         );
         let mut iter = entries.iter();
+        // Fixture roundtrip assumes current-schema fixed layout.
         for entry in iter.by_ref() {
             let body = *entry.body;
             append_fixed_block(&mut out, body.as_bytes(), entry_len);
@@ -302,6 +339,7 @@ fn template_51_roundtrip() {
 fn template_30_builder_roundtrip() {
     rebuild_payload(TEMPLATE_30_PACKET, |msg_hdr, body| {
         let (view, _) = security_status::parse_with_header(body, msg_hdr).expect("parse");
+        // Fixture encode parity assumes current-schema fixed layout.
         let msg = *view.body;
 
         let mut builder = security_status::SecurityStatus30Builder::new();
@@ -342,6 +380,7 @@ fn template_30_builder_roundtrip() {
 fn template_47_builder_roundtrip() {
     rebuild_payload(TEMPLATE_47_PACKET, |msg_hdr, body| {
         let (view, after_fixed) = inc_book::parse_with_header(body, msg_hdr).expect("parse");
+        // Fixture encode parity assumes current-schema fixed layout.
         let msg = *view.body;
         let entries = inc_book::parse_no_md_entries(after_fixed).expect("entries");
 
@@ -352,6 +391,7 @@ fn template_47_builder_roundtrip() {
             .no_md_entries(|group| {
                 let iter = entries.iter();
                 for entry in iter {
+                    // Fixture encode parity assumes current-schema fixed layout.
                     let body = *entry.body;
                     group.entry(|entry| {
                         entry
@@ -397,6 +437,7 @@ fn template_47_builder_roundtrip() {
 fn template_48_builder_roundtrip() {
     rebuild_payload(TEMPLATE_48_PACKET, |msg_hdr, body| {
         let (view, after_fixed) = trade_summary::parse_with_header(body, msg_hdr).expect("parse");
+        // Fixture encode parity assumes current-schema fixed layout.
         let msg = *view.body;
         let entries = trade_summary::parse_no_md_entries(after_fixed).expect("entries");
 
@@ -413,6 +454,7 @@ fn template_48_builder_roundtrip() {
             .no_md_entries(|group| {
                 let iter = entries.iter();
                 for entry in iter {
+                    // Fixture encode parity assumes current-schema fixed layout.
                     let body = *entry.body;
                     group.entry(|entry| {
                         entry
@@ -428,6 +470,7 @@ fn template_48_builder_roundtrip() {
             .no_order_id_entries(|group| {
                 let iter = order_entries.iter();
                 for entry in iter {
+                    // Fixture encode parity assumes current-schema fixed layout.
                     let body = *entry.body;
                     group.entry(|entry| {
                         entry.order_id(body.order_id).last_qty(body.last_qty);
@@ -471,6 +514,7 @@ fn template_48_builder_roundtrip() {
 fn template_51_builder_roundtrip() {
     rebuild_payload(TEMPLATE_51_PACKET, |msg_hdr, body| {
         let (view, after_fixed) = session_stats::parse_with_header(body, msg_hdr).expect("parse");
+        // Fixture encode parity assumes current-schema fixed layout.
         let msg = *view.body;
         let entries = session_stats::parse_no_md_entries(after_fixed).expect("entries");
 
@@ -483,6 +527,7 @@ fn template_51_builder_roundtrip() {
             .no_md_entries(|group| {
                 let iter = entries.iter();
                 for entry in iter {
+                    // Fixture encode parity assumes current-schema fixed layout.
                     let body = *entry.body;
                     group.entry(|entry| {
                         entry

@@ -19,10 +19,14 @@
 - Message view accessors now generate `#[inline]` `has_*` and getter methods, including constant-field version-aware access in `parse_with_header` views.
 - Group iterators now parse entries with a block-length-safe borrowed/owned path instead of relying on direct `parse_prefix` over raw entry slices.
 - Short-block decode fallbacks in `parse_with_header` and group entry parsing no longer allocate/copy padding buffers; generated views now keep borrowed raw slices and rely on accessor methods for schema-evolution-safe field reads.
+- Generated message/group bodies now cache parsed references when the acting block is large enough, and field getters use that cached fast path before falling back to offset-based raw parsing.
+- Generated fixed-field encoder setters now use an in-bounds write helper (after constructor-time capacity checks) instead of per-call checked writes with `.expect(...)`.
+- Generated min/max/null validation checks in setters now emit direct typed literals/conditions instead of parsing numeric strings on each call.
 - Dimension-type field detection for repeating groups now supports both `<type>` and `<ref>` members and uses stronger name normalization/fallbacks.
 
 ### Documentation
 - Updated `README.md`, `docs/USAGE.md`, and `examples/cme_mdp3_pcap_dump/README.md` to match current constant-field and group-entry semantics.
+- Added explicit guarded fast-path guidance (`acting_block_length` / `acting_version` checks before direct `view.body`/`entry.body` reads) and aligned the CME example dump code with that pattern.
 
 ## 0.5.0
 

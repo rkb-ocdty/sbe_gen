@@ -164,12 +164,18 @@ fn parse_fallback_uses_borrowed_raw_slices_without_heap_allocations() {
 
     assert!(msg_rs.contains("pub struct EvolvingBody<'a>"));
     assert!(msg_rs.contains("pub struct EntriesEntryBody<'a>"));
-    assert!(msg_rs.contains("let raw = if acting_block_length >= needed"));
-    assert!(msg_rs.contains("let raw = if block_length >= needed"));
+    assert!(msg_rs.contains("parsed: Option<&'a Evolving>"));
+    assert!(msg_rs.contains("parsed: Option<&'a EntriesEntry>"));
+    assert!(msg_rs.contains("let (parsed, raw) = if acting_block_length >= needed"));
+    assert!(msg_rs.contains("let (parsed, raw) = if block_length >= needed"));
+    assert!(msg_rs.contains("if let Some(msg) = self.body.parsed() { return Some(&msg.seq); }"));
+    assert!(
+        msg_rs.contains("if let Some(entry) = self.body.parsed() { return Some(&entry.qty); }")
+    );
     assert!(!msg_rs.contains("Owned(Vec<u8>)"));
     assert!(!msg_rs.contains("vec![0u8; needed]"));
-    assert!(msg_rs.contains("message body shorter than current layout; use accessor methods"));
-    assert!(msg_rs.contains("group entry shorter than current layout; use accessor methods"));
+    assert!(msg_rs.contains("message body shorter than current layout"));
+    assert!(msg_rs.contains("group entry shorter than current layout"));
 }
 
 #[test]

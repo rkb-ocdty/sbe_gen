@@ -154,7 +154,7 @@ Decode a framed message (header + body):
 let (hdr, body) = MessageHeader::parse_prefix(frame).expect("header");
 let (view, rest) = crate::sbe::heartbeat::parse_with_header(body, &hdr).expect("heartbeat");
 assert!(rest.is_empty());
-let seq = view.body.seq.get();
+let seq = view.seq().map(|v| v.get());
 ```
 
 Encode a message:
@@ -272,9 +272,8 @@ let levels = crate::sbe::book::parse_levels(rest).expect("levels");
 
 let mut iter = levels.iter();
 while let Some(level) = iter.next() {
-    let price = level.body.price.get(); // deref-friendly path
-    let qty = level.body.qty.get();
-    let safe_price = level.price().map(|p| p.get()); // blockLength-safe path
+    let price = level.price().map(|p| p.get()); // blockLength-safe path
+    let qty = level.qty().map(|q| q.get());
     let note = level.note.as_str();
 }
 
@@ -317,6 +316,42 @@ let (hdr, body) = MessageHeader::parse_prefix(frame).expect("header");
 let (view, rest) = crate::sbe::book::parse_with_header(body, &hdr).expect("book");
 if view.has_seq() {
     let seq = view.seq().map(|v| v.get());
+}
+```
+
+## Fast path (fixed schema/version)
+
+Use accessors by default. They are the schema-evolution-safe path and handle
+runtime `acting_block_length` / `acting_version` correctly.
+
+If your input stream is pinned to one schema version and fixed block length,
+you can guard once and then read `view.body` directly:
+
+```rust
+let (hdr, body) = MessageHeader::parse_prefix(frame).expect("header");
+let (view, rest) = crate::sbe::book::parse_with_header(body, &hdr).expect("book");
+assert!(rest.is_empty());
+
+let fixed_layout = view.acting_version >= Book::SCHEMA_VERSION
+    && view.acting_block_length >= core::mem::size_of::<Book>();
+if fixed_layout {
+    let msg = &*view.body;
+    let seq_fast = msg.seq.get();
+    let _ = seq_fast;
+}
+```
+
+For repeating groups, use the same guard per entry before direct deref:
+
+```rust
+for entry in entries.iter() {
+    if entry.acting_block_length >= core::mem::size_of::<NoMDEntriesEntry>() {
+        let body = &*entry.body;
+        // direct fixed-field reads here
+    } else {
+        let price = entry.price().map(|v| v.get());
+        let _ = price;
+    }
 }
 ```
 

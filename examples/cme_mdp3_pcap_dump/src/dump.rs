@@ -11,6 +11,28 @@ use std::mem;
 use zerocopy::byteorder::little_endian::{U16, U32, U64};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Ref, Unaligned};
 
+macro_rules! message_body_if_full {
+    ($view:expr, $ty:path) => {
+        if $view.acting_version >= <$ty>::SCHEMA_VERSION
+            && $view.acting_block_length >= core::mem::size_of::<$ty>()
+        {
+            Some(&*$view.body)
+        } else {
+            None
+        }
+    };
+}
+
+macro_rules! entry_body_if_full {
+    ($entry:expr, $ty:path) => {
+        if $entry.acting_block_length >= core::mem::size_of::<$ty>() {
+            Some(&*$entry.body)
+        } else {
+            None
+        }
+    };
+}
+
 /// Packet header used by the CME MDP feed. The sequence number and
 /// sending time are present at the start of each UDP packet. These
 /// two fields are little-endian, 4-byte and 8-byte integers
@@ -129,10 +151,11 @@ fn dump_channel_reset(msg_hdr: &MessageHeader, body: &[u8]) {
         return;
     };
 
+    let msg = message_body_if_full!(view, channel_reset::ChannelReset4);
     println!(
-        "  ChannelReset: transact_time={} mei={} entries={}",
-        view.body.transact_time.get(),
-        view.body.match_event_indicator.0,
+        "  ChannelReset: transact_time={:?} mei={:?} entries={}",
+        view.transact_time().map(|v| v.get()),
+        msg.map(|m| m.match_event_indicator.0),
         entries.count()
     );
 
@@ -143,9 +166,9 @@ fn dump_channel_reset(msg_hdr: &MessageHeader, body: &[u8]) {
             break;
         };
         println!(
-            "    entry {} appl_id={} action={} entry_type={}",
+            "    entry {} appl_id={:?} action={} entry_type={}",
             idx,
-            entry.body.appl_id.get(),
+            entry.appl_id().map(|v| v.get()),
             channel_reset::NoMDEntriesEntry::MD_UPDATE_ACTION.0,
             channel_reset::NoMDEntriesEntry::MD_ENTRY_TYPE.0
         );
@@ -161,18 +184,26 @@ fn dump_security_status(msg_hdr: &MessageHeader, body: &[u8]) {
         eprintln!("  SecurityStatus30 truncated");
         return;
     };
-    let msg = &view.body;
+    let security_group = view
+        .security_group()
+        .map(|v| decode_ascii(v))
+        .unwrap_or_else(|| "<N/A>".to_string());
+    let asset = view
+        .asset()
+        .map(|v| decode_ascii(v))
+        .unwrap_or_else(|| "<N/A>".to_string());
+    let msg = message_body_if_full!(view, security_status::SecurityStatus30);
     println!(
-        "  SecurityStatus30: transact_time={} security_group={} asset={} security_id={:?} trade_date={} mei={} status={} halt={} event={}",
-        msg.transact_time.get(),
-        decode_ascii(&msg.security_group),
-        decode_ascii(&msg.asset),
-        decode_i32_null(msg.security_id.get()),
-        msg.trade_date.get(),
-        msg.match_event_indicator.0,
-        msg.security_trading_status.0,
-        msg.halt_reason.0,
-        msg.security_trading_event.0
+        "  SecurityStatus30: transact_time={:?} security_group={} asset={} security_id={:?} trade_date={:?} mei={:?} status={:?} halt={:?} event={:?}",
+        view.transact_time().map(|v| v.get()),
+        security_group,
+        asset,
+        view.security_id().and_then(|v| decode_i32_null(v.get())),
+        view.trade_date().map(|v| v.get()),
+        msg.map(|m| m.match_event_indicator.0),
+        msg.map(|m| m.security_trading_status.0),
+        msg.map(|m| m.halt_reason.0),
+        msg.map(|m| m.security_trading_event.0)
     );
 }
 
@@ -186,10 +217,11 @@ fn dump_incremental_order_book(msg_hdr: &MessageHeader, body: &[u8]) {
         return;
     };
 
+    let msg = message_body_if_full!(view, inc_book::MDIncrementalRefreshOrderBook47);
     println!(
-        "  MDIncrementalRefreshOrderBook47: transact_time={} mei={} entries={}",
-        view.body.transact_time.get(),
-        view.body.match_event_indicator.0,
+        "  MDIncrementalRefreshOrderBook47: transact_time={:?} mei={:?} entries={}",
+        view.transact_time().map(|v| v.get()),
+        msg.map(|m| m.match_event_indicator.0),
         entries.count()
     );
 
@@ -199,17 +231,21 @@ fn dump_incremental_order_book(msg_hdr: &MessageHeader, body: &[u8]) {
             eprintln!("    entry {} truncated", idx);
             break;
         };
-        let body = entry.body;
+        let body = entry_body_if_full!(entry, inc_book::NoMDEntriesEntry);
         println!(
-            "    [{}] order_id={:?} priority={:?} price={:?} qty={:?} sec_id={} action=[{:?}] entry_type=[{:?}]",
+            "    [{}] order_id={:?} priority={:?} price={:?} qty={:?} sec_id={:?} action=[{:?}] entry_type=[{:?}]",
             idx,
-            decode_u64_null(body.order_id.get()),
-            decode_u64_null(body.md_order_priority.get()),
-            decode_price_null(&body.md_entry_px),
-            decode_i32_null(body.md_display_qty.get()),
-            body.security_id.get(),
-            body.md_update_action.as_enum().unwrap(),
-            body.md_entry_type.as_enum().unwrap(),
+            entry.order_id().and_then(|v| decode_u64_null(v.get())),
+            entry
+                .md_order_priority()
+                .and_then(|v| decode_u64_null(v.get())),
+            entry.md_entry_px().and_then(decode_price_null),
+            entry
+                .md_display_qty()
+                .and_then(|v| decode_i32_null(v.get())),
+            entry.security_id().map(|v| v.get()),
+            body.and_then(|e| e.md_update_action.as_enum()),
+            body.and_then(|e| e.md_entry_type.as_enum()),
         );
     }
 }
@@ -224,10 +260,11 @@ fn dump_trade_summary(msg_hdr: &MessageHeader, body: &[u8]) {
         return;
     };
 
+    let msg = message_body_if_full!(view, trade_summary::MDIncrementalRefreshTradeSummary48);
     println!(
-        "  MDIncrementalRefreshTradeSummary48: transact_time={} mei={} entries={}",
-        view.body.transact_time.get(),
-        view.body.match_event_indicator.0,
+        "  MDIncrementalRefreshTradeSummary48: transact_time={:?} mei={:?} entries={}",
+        view.transact_time().map(|v| v.get()),
+        msg.map(|m| m.match_event_indicator.0),
         entries.count()
     );
 
@@ -239,19 +276,21 @@ fn dump_trade_summary(msg_hdr: &MessageHeader, body: &[u8]) {
             truncated = true;
             break;
         };
-        let body = entry.body;
+        let body = entry_body_if_full!(entry, trade_summary::NoMDEntriesEntry);
         println!(
-            "    [{}] price={} size={} sec_id={} rpt_seq={} orders={} aggressor={} action={} entry_type={} trade_entry_id={:?}",
+            "    [{}] price={:?} size={:?} sec_id={:?} rpt_seq={:?} orders={:?} aggressor={:?} action={:?} entry_type={} trade_entry_id={:?}",
             idx,
-            decode_price(&body.md_entry_px),
-            body.md_entry_size.get(),
-            body.security_id.get(),
-            body.rpt_seq.get(),
-            body.number_of_orders.get(),
-            body.aggressor_side.0,
-            body.md_update_action.0,
+            entry.md_entry_px().map(decode_price),
+            entry.md_entry_size().map(|v| v.get()),
+            entry.security_id().map(|v| v.get()),
+            entry.rpt_seq().map(|v| v.get()),
+            entry.number_of_orders().map(|v| v.get()),
+            body.map(|e| e.aggressor_side.0),
+            body.map(|e| e.md_update_action.0),
             trade_summary::NoMDEntriesEntry::MD_ENTRY_TYPE.0,
-            decode_u32_null(body.md_trade_entry_id.get())
+            entry
+                .md_trade_entry_id()
+                .and_then(|v| decode_u32_null(v.get()))
         );
     }
     if truncated {
@@ -270,12 +309,11 @@ fn dump_trade_summary(msg_hdr: &MessageHeader, body: &[u8]) {
             eprintln!("    order entry {} truncated", idx);
             break;
         };
-        let body = entry.body;
         println!(
-            "    order[{}] order_id={} last_qty={}",
+            "    order[{}] order_id={:?} last_qty={:?}",
             idx,
-            body.order_id.get(),
-            body.last_qty.get()
+            entry.order_id().map(|v| v.get()),
+            entry.last_qty().map(|v| v.get())
         );
     }
 }
@@ -290,10 +328,11 @@ fn dump_session_statistics(msg_hdr: &MessageHeader, body: &[u8]) {
         return;
     };
 
+    let msg = message_body_if_full!(view, session_stats::MDIncrementalRefreshSessionStatistics51);
     println!(
-        "  MDIncrementalRefreshSessionStatistics51: transact_time={} mei={} entries={}",
-        view.body.transact_time.get(),
-        view.body.match_event_indicator.0,
+        "  MDIncrementalRefreshSessionStatistics51: transact_time={:?} mei={:?} entries={}",
+        view.transact_time().map(|v| v.get()),
+        msg.map(|m| m.match_event_indicator.0),
         entries.count()
     );
 
@@ -303,17 +342,17 @@ fn dump_session_statistics(msg_hdr: &MessageHeader, body: &[u8]) {
             eprintln!("    entry {} truncated", idx);
             break;
         };
-        let body = entry.body;
+        let body = entry_body_if_full!(entry, session_stats::NoMDEntriesEntry);
         println!(
-            "    [{}] price={} sec_id={} rpt_seq={} flag={} action=[{:?}] entry_type=[{:?}] qty={:?}",
+            "    [{}] price={:?} sec_id={:?} rpt_seq={:?} flag={:?} action=[{:?}] entry_type=[{:?}] qty={:?}",
             idx,
-            decode_price(&body.md_entry_px),
-            body.security_id.get(),
-            body.rpt_seq.get(),
-            body.open_close_settl_flag.0,
-            body.md_update_action.as_enum().unwrap(),
-            body.md_entry_type.as_enum().unwrap(),
-            decode_i32_null(body.md_entry_size.get())
+            entry.md_entry_px().map(decode_price),
+            entry.security_id().map(|v| v.get()),
+            entry.rpt_seq().map(|v| v.get()),
+            body.map(|e| e.open_close_settl_flag.0),
+            body.and_then(|e| e.md_update_action.as_enum()),
+            body.and_then(|e| e.md_entry_type.as_enum()),
+            entry.md_entry_size().and_then(|v| decode_i32_null(v.get()))
         );
     }
 }
@@ -329,12 +368,12 @@ fn dump_snapshot_order_book(msg_hdr: &MessageHeader, body: &[u8]) {
     };
 
     println!(
-        "  SnapshotFullRefreshOrderBook53: sec_id={} chunk {}/{} last_seq={} transact_time={}",
-        view.body.security_id.get(),
-        view.body.current_chunk.get(),
-        view.body.no_chunks.get(),
-        view.body.last_msg_seq_num_processed.get(),
-        view.body.transact_time.get()
+        "  SnapshotFullRefreshOrderBook53: sec_id={:?} chunk {:?}/{:?} last_seq={:?} transact_time={:?}",
+        view.security_id().map(|v| v.get()),
+        view.current_chunk().map(|v| v.get()),
+        view.no_chunks().map(|v| v.get()),
+        view.last_msg_seq_num_processed().map(|v| v.get()),
+        view.transact_time().map(|v| v.get())
     );
 
     let mut iter = entries.iter();
@@ -343,15 +382,17 @@ fn dump_snapshot_order_book(msg_hdr: &MessageHeader, body: &[u8]) {
             eprintln!("    entry {} truncated", idx);
             break;
         };
-        let body = entry.body;
+        let body = entry_body_if_full!(entry, snap_book::NoMDEntriesEntry);
         println!(
-            "    [{}] order_id={} priority={:?} price={} qty={} entry_type={}",
+            "    [{}] order_id={:?} priority={:?} price={:?} qty={:?} entry_type={:?}",
             idx,
-            body.order_id.get(),
-            decode_u64_null(body.md_order_priority.get()),
-            decode_price(&body.md_entry_px),
-            body.md_display_qty.get(),
-            body.md_entry_type.0
+            entry.order_id().map(|v| v.get()),
+            entry
+                .md_order_priority()
+                .and_then(|v| decode_u64_null(v.get())),
+            entry.md_entry_px().map(decode_price),
+            entry.md_display_qty().map(|v| v.get()),
+            body.map(|e| e.md_entry_type.0)
         );
     }
 }
@@ -366,11 +407,12 @@ fn dump_top_orders_snapshot(msg_hdr: &MessageHeader, body: &[u8]) {
         return;
     };
 
+    let msg = message_body_if_full!(view, top_orders::SnapshotRefreshTopOrders59);
     println!(
-        "  SnapshotRefreshTopOrders59: sec_id={} transact_time={} mei={} entries={}",
-        view.body.security_id.get(),
-        view.body.transact_time.get(),
-        view.body.match_event_indicator.0,
+        "  SnapshotRefreshTopOrders59: sec_id={:?} transact_time={:?} mei={:?} entries={}",
+        view.security_id().map(|v| v.get()),
+        view.transact_time().map(|v| v.get()),
+        msg.map(|m| m.match_event_indicator.0),
         entries.count()
     );
 
@@ -380,15 +422,15 @@ fn dump_top_orders_snapshot(msg_hdr: &MessageHeader, body: &[u8]) {
             eprintln!("    entry {} truncated", idx);
             break;
         };
-        let body = entry.body;
+        let body = entry_body_if_full!(entry, top_orders::NoMDEntriesEntry);
         println!(
-            "    [{}] order_id={} priority={} price={} qty={} entry_type={}",
+            "    [{}] order_id={:?} priority={:?} price={:?} qty={:?} entry_type={:?}",
             idx,
-            body.order_id.get(),
-            body.md_order_priority.get(),
-            decode_price(&body.md_entry_px),
-            body.md_display_qty.get(),
-            body.md_entry_type.0
+            entry.order_id().map(|v| v.get()),
+            entry.md_order_priority().map(|v| v.get()),
+            entry.md_entry_px().map(decode_price),
+            entry.md_display_qty().map(|v| v.get()),
+            body.map(|e| e.md_entry_type.0)
         );
     }
 }

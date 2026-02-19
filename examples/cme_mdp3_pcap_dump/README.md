@@ -31,3 +31,18 @@ Optional filters:
 - The example test suite also covers constant-field correctness and
   repeating-group decoding when runtime `blockLength` is shorter than the
   compiled entry struct size.
+- Decode paths in `src/dump.rs` use accessors by default. For fixed-layout
+  hot paths, direct `view.body` / `entry.body` reads are guarded by runtime
+  checks before deref:
+
+```rust
+let fixed_msg = view.acting_version >= MessageType::SCHEMA_VERSION
+    && view.acting_block_length >= core::mem::size_of::<MessageType>();
+if fixed_msg {
+    let msg = &*view.body;
+}
+
+if entry.acting_block_length >= core::mem::size_of::<EntryType>() {
+    let body = &*entry.body;
+}
+```
