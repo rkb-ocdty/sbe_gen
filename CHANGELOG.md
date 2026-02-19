@@ -18,6 +18,7 @@
   - excluded from encoded-size assumptions.
 - Message view accessors now generate `#[inline]` `has_*` and getter methods, including constant-field version-aware access in `parse_with_header` views.
 - Group iterators now parse entries with a block-length-safe borrowed/owned path instead of relying on direct `parse_prefix` over raw entry slices.
+- Short-block decode fallbacks in `parse_with_header` and group entry parsing no longer allocate/copy padding buffers; generated views now keep borrowed raw slices and rely on accessor methods for schema-evolution-safe field reads.
 - Dimension-type field detection for repeating groups now supports both `<type>` and `<ref>` members and uses stronger name normalization/fallbacks.
 
 ### Documentation

@@ -138,6 +138,41 @@ fn generates_nested_groups() {
 }
 
 #[test]
+fn parse_fallback_uses_borrowed_raw_slices_without_heap_allocations() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <composite name="groupSize">
+                    <type name="blockLength" primitiveType="uint16"/>
+                    <type name="numInGroup" primitiveType="uint8"/>
+                </composite>
+            </types>
+            <message name="Evolving" id="1" blockLength="8">
+                <field name="seq" id="1" type="uint32" offset="0" />
+                <field name="price" id="2" type="uint32" offset="4" />
+                <group name="Entries" id="3" blockLength="8" dimensionType="groupSize">
+                    <field name="qty" id="1" type="uint32" offset="0" />
+                    <field name="px" id="2" type="uint32" offset="4" />
+                </group>
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let msg_rs = module_map.get("evolving.rs").expect("evolving.rs emitted");
+
+    assert!(msg_rs.contains("pub struct EvolvingBody<'a>"));
+    assert!(msg_rs.contains("pub struct EntriesEntryBody<'a>"));
+    assert!(msg_rs.contains("let raw = if acting_block_length >= needed"));
+    assert!(msg_rs.contains("let raw = if block_length >= needed"));
+    assert!(!msg_rs.contains("Owned(Vec<u8>)"));
+    assert!(!msg_rs.contains("vec![0u8; needed]"));
+    assert!(msg_rs.contains("message body shorter than current layout; use accessor methods"));
+    assert!(msg_rs.contains("group entry shorter than current layout; use accessor methods"));
+}
+
+#[test]
 fn byte_order_and_offsets() {
     let xml = r#"
         <messageSchema package="test">

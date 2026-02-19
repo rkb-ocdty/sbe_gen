@@ -1095,15 +1095,15 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
     }
     // acting version aware view
     code.push_str(&format!(
-        "#[derive(Debug, Clone)]\npub enum {}Body<'a> {{\n    Borrowed(&'a {}, &'a [u8]),\n    Owned(Vec<u8>),\n}}\n\n",
-        msg.name, msg.name
+        "#[derive(Debug, Clone, Copy)]\npub struct {}Body<'a> {{\n    raw: &'a [u8],\n}}\n\n",
+        msg.name
     ));
     code.push_str(&format!(
-        "impl<'a> core::ops::Deref for {}Body<'a> {{\n    type Target = {};\n    fn deref(&self) -> &Self::Target {{\n        match self {{\n            Self::Borrowed(m, _) => m,\n            Self::Owned(bytes) => {{\n                let (msg, _) = Ref::<_, {}>::from_prefix(bytes.as_slice()).expect(\"padded message\");\n                Ref::into_ref(msg)\n            }}\n        }}\n    }}\n}}\n\n",
+        "impl<'a> core::ops::Deref for {}Body<'a> {{\n    type Target = {};\n    fn deref(&self) -> &Self::Target {{\n        let (msg, _) = Ref::<_, {}>::from_prefix(self.raw)\n            .expect(\"message body shorter than current layout; use accessor methods\");\n        Ref::into_ref(msg)\n    }}\n}}\n\n",
         msg.name, msg.name, msg.name
     ));
     code.push_str(&format!(
-        "impl<'a> {}Body<'a> {{\n    fn bytes(&self) -> &[u8] {{\n        match self {{\n            Self::Borrowed(_, raw) => raw,\n            Self::Owned(bytes) => bytes.as_slice(),\n        }}\n    }}\n}}\n\n",
+        "impl<'a> {}Body<'a> {{\n    fn bytes(&self) -> &[u8] {{\n        self.raw\n    }}\n}}\n\n",
         msg.name
     ));
     code.push_str(&format!(
@@ -1167,7 +1167,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
     }
     code.push_str("}\n\n");
     code.push_str(&format!(
-        "pub fn parse_with_header<'a>(body: &'a [u8], header: &MessageHeader) -> Option<({name}View<'a>, &'a [u8])> {{\n    let mut acting_block_length = header.block_length.get() as usize;\n    if acting_block_length == 0 {{ acting_block_length = {name}::BLOCK_LENGTH as usize; }}\n    let acting_version = header.version.get();\n    if body.len() < acting_block_length {{ return None; }}\n    let needed = core::mem::size_of::<{name}>();\n    let (prefix, rest) = body.split_at(acting_block_length);\n    if acting_block_length >= needed {{\n        let (msg, _) = Ref::<_, {name}>::from_prefix(&prefix[..needed]).ok()?;\n        let view = {name}View {{ body: {name}Body::Borrowed(Ref::into_ref(msg), &prefix[..needed]), acting_block_length, acting_version }};\n        Some((view, rest))\n    }} else {{\n        let mut owned = vec![0u8; needed];\n        owned[..acting_block_length].copy_from_slice(prefix);\n        let view = {name}View {{ body: {name}Body::Owned(owned), acting_block_length, acting_version }};\n        Some((view, rest))\n    }}\n}}\n",
+        "pub fn parse_with_header<'a>(body: &'a [u8], header: &MessageHeader) -> Option<({name}View<'a>, &'a [u8])> {{\n    let mut acting_block_length = header.block_length.get() as usize;\n    if acting_block_length == 0 {{ acting_block_length = {name}::BLOCK_LENGTH as usize; }}\n    let acting_version = header.version.get();\n    if body.len() < acting_block_length {{ return None; }}\n    let needed = core::mem::size_of::<{name}>();\n    let (prefix, rest) = body.split_at(acting_block_length);\n    let raw = if acting_block_length >= needed {{\n        &prefix[..needed]\n    }} else {{\n        prefix\n    }};\n    let view = {name}View {{ body: {name}Body {{ raw }}, acting_block_length, acting_version }};\n    Some((view, rest))\n}}\n",
         name = msg.name
     ));
     code
@@ -1696,15 +1696,15 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     ));
 
     code.push_str(&format!(
-        "#[derive(Debug, Clone)]\npub enum {}<'a> {{\n    Borrowed(&'a {}, &'a [u8]),\n    Owned(Vec<u8>),\n}}\n\n",
-        entry_body, entry_struct
+        "#[derive(Debug, Clone, Copy)]\npub struct {}<'a> {{\n    raw: &'a [u8],\n}}\n\n",
+        entry_body
     ));
     code.push_str(&format!(
-        "impl<'a> core::ops::Deref for {}<'a> {{\n    type Target = {};\n    fn deref(&self) -> &Self::Target {{\n        match self {{\n            Self::Borrowed(m, _) => m,\n            Self::Owned(bytes) => {{\n                let (entry, _) = Ref::<_, {}>::from_prefix(bytes.as_slice()).expect(\"padded group entry\");\n                Ref::into_ref(entry)\n            }}\n        }}\n    }}\n}}\n\n",
+        "impl<'a> core::ops::Deref for {}<'a> {{\n    type Target = {};\n    fn deref(&self) -> &Self::Target {{\n        let (entry, _) = Ref::<_, {}>::from_prefix(self.raw)\n            .expect(\"group entry shorter than current layout; use accessor methods\");\n        Ref::into_ref(entry)\n    }}\n}}\n\n",
         entry_body, entry_struct, entry_struct
     ));
     code.push_str(&format!(
-        "impl<'a> {}<'a> {{\n    fn bytes(&self) -> &[u8] {{\n        match self {{\n            Self::Borrowed(_, raw) => raw,\n            Self::Owned(bytes) => bytes.as_slice(),\n        }}\n    }}\n}}\n\n",
+        "impl<'a> {}<'a> {{\n    fn bytes(&self) -> &[u8] {{\n        self.raw\n    }}\n}}\n\n",
         entry_body
     ));
     code.push_str(&format!(
@@ -1741,7 +1741,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     code.push_str(PARSE_PREFIX_METHOD);
     code.push_str("}\n\n");
     code.push_str(&format!(
-        "fn {parse_fn}<'a>(entry: &'a [u8], block_length: usize) -> Option<{entry_body}<'a>> {{\n    if entry.len() < block_length {{ return None; }}\n    let needed = core::mem::size_of::<{entry_struct}>();\n    if block_length >= needed {{\n        let (body, _) = Ref::<_, {entry_struct}>::from_prefix(&entry[..needed]).ok()?;\n        Some({entry_body}::Borrowed(Ref::into_ref(body), &entry[..needed]))\n    }} else {{\n        let mut owned = vec![0u8; needed];\n        owned[..block_length].copy_from_slice(&entry[..block_length]);\n        Some({entry_body}::Owned(owned))\n    }}\n}}\n\n",
+        "fn {parse_fn}<'a>(entry: &'a [u8], block_length: usize) -> Option<{entry_body}<'a>> {{\n    if entry.len() < block_length {{ return None; }}\n    let needed = core::mem::size_of::<{entry_struct}>();\n    let raw = if block_length >= needed {{\n        &entry[..needed]\n    }} else {{\n        &entry[..block_length]\n    }};\n    Some({entry_body} {{ raw }})\n}}\n\n",
         parse_fn = parse_entry_body_fn,
         entry_body = entry_body,
         entry_struct = entry_struct
