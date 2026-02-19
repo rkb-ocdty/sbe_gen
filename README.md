@@ -120,7 +120,7 @@ generator at compile time.
 
 ```toml
 [build-dependencies]
-sbe_gen = "0.5.0"
+sbe_gen = "0.6.0"
 ```
 
 2) Organize schemas under `schemas/<schema_name>/`:

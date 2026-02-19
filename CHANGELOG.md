@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.0
+
 ### Added
 - Generated constant fields now expose both associated constants and `#[inline]` constant accessors on messages and group entries.
 - Added field-level constant literal support (`<field presence="constant">...</field>`) in the parser and generator.
