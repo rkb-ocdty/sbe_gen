@@ -52,7 +52,7 @@ Add the generator as a build dependency:
 
 ```toml
 [build-dependencies]
-sbe_gen = "0.6.0"
+sbe_gen = "0.6.1"
 ```
 
 ## Generated output layout

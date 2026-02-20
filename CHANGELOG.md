@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.1
+
 ### Added
 - Message `*View` APIs now generate comprehensive schema-evolution helpers:
   - full field coverage for fixed-block fields (including previously skipped enum/set fields such as `security_update_action`),
