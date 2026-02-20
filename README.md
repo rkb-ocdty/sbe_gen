@@ -289,9 +289,7 @@ assert!(rest.is_empty());
 let seq = view.seq().map(|v| v.get());
 
 // Optional fast path for fixed layout streams.
-let fixed_layout = view.acting_version >= Book::SCHEMA_VERSION
-    && view.acting_block_length >= core::mem::size_of::<Book>();
-if fixed_layout {
+if view.is_fixed_layout() {
     let msg = &*view.body;
     let seq_fast = msg.seq.get();
     let _ = seq_fast;

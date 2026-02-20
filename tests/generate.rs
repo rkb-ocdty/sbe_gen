@@ -321,3 +321,56 @@ fn field_level_constant_literals_are_not_encoded() {
     assert!(msg_rs.contains("#[inline]\n    pub fn mode(&self) -> u8"));
     assert!(msg_rs.contains("pub const BLOCK_LENGTH: u16 = 4"));
 }
+
+#[test]
+fn view_generates_fallback_value_required_enum_composite_and_string_helpers() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <type name="CHAR" primitiveType="char"/>
+                <type name="Symbol6" primitiveType="char" length="6"/>
+                <type name="uInt32NULL" primitiveType="uint32" nullValue="4294967295"/>
+                <enum name="SecurityUpdateAction" encodingType="CHAR">
+                    <validValue name="Add">A</validValue>
+                    <validValue name="Delete">D</validValue>
+                </enum>
+                <composite name="PRICENULL9">
+                    <type name="mantissa" primitiveType="int64" nullValue="9223372036854775807"/>
+                </composite>
+            </types>
+            <message name="Def" id="1" blockLength="23">
+                <field name="SecurityUpdateAction" id="1" type="SecurityUpdateAction" offset="0"/>
+                <field name="Symbol" id="2" type="Symbol6" offset="1" semanticType="String"/>
+                <field name="Qty" id="3" type="uInt32NULL" offset="7" presence="optional"/>
+                <field name="TradingReferencePrice" id="4" type="PRICENULL9" offset="11"/>
+                <field name="RequiredMaybe" id="5" type="uInt32NULL" offset="19" presence="required"/>
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let def_rs = module_map.get("def.rs").expect("def.rs emitted");
+
+    assert!(def_rs.contains("pub enum DecodeFieldError"));
+    assert!(def_rs.contains("pub fn is_fixed_layout(&self) -> bool"));
+    assert!(def_rs.contains("#[inline]\n    pub fn has_security_update_action(&self) -> bool"));
+    assert!(def_rs.contains(
+        "#[inline]\n    pub fn security_update_action(&self) -> Option<&SecurityUpdateAction>"
+    ));
+    assert!(def_rs.contains(
+        "#[inline]\n    pub fn security_update_action_value(&self) -> Option<SecurityUpdateAction>"
+    ));
+    assert!(def_rs.contains("pub fn security_update_action_required(&self) -> Result<SecurityUpdateAction, DecodeFieldError>"));
+    assert!(def_rs.contains(
+        "#[inline]\n    pub fn security_update_action_enum(&self) -> Option<SecurityUpdateActionEnum>"
+    ));
+    assert!(def_rs.contains("pub fn symbol_bytes(&self) -> Option<&[u8; 6]>"));
+    assert!(def_rs.contains("pub fn symbol_str(&self) -> Option<&str>"));
+    assert!(def_rs.contains("pub fn symbol_str_trimmed(&self) -> Option<&str>"));
+    assert!(def_rs.contains("pub fn qty_value(&self) -> Option<Option<u32>>"));
+    assert!(
+        def_rs.contains("pub fn required_maybe_required(&self) -> Result<u32, DecodeFieldError>")
+    );
+    assert!(def_rs.contains("pub fn trading_reference_price_mantissa_opt(&self) -> Option<i64>"));
+}

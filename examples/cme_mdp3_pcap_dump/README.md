@@ -36,9 +36,7 @@ Optional filters:
   checks before deref:
 
 ```rust
-let fixed_msg = view.acting_version >= MessageType::SCHEMA_VERSION
-    && view.acting_block_length >= core::mem::size_of::<MessageType>();
-if fixed_msg {
+if view.is_fixed_layout() {
     let msg = &*view.body;
 }
 

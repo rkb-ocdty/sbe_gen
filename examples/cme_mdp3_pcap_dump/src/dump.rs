@@ -12,10 +12,8 @@ use zerocopy::byteorder::little_endian::{U16, U32, U64};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Ref, Unaligned};
 
 macro_rules! message_body_if_full {
-    ($view:expr, $ty:path) => {
-        if $view.acting_version >= <$ty>::SCHEMA_VERSION
-            && $view.acting_block_length >= core::mem::size_of::<$ty>()
-        {
+    ($view:expr) => {
+        if $view.is_fixed_layout() {
             Some(&*$view.body)
         } else {
             None
@@ -151,10 +149,13 @@ fn dump_channel_reset(msg_hdr: &MessageHeader, body: &[u8]) {
         return;
     };
 
-    let msg = message_body_if_full!(view, channel_reset::ChannelReset4);
+    let msg = message_body_if_full!(view);
+    let transact_time = msg
+        .map(|m| m.transact_time.get())
+        .or_else(|| view.transact_time_value());
     println!(
         "  ChannelReset: transact_time={:?} mei={:?} entries={}",
-        view.transact_time().map(|v| v.get()),
+        transact_time,
         msg.map(|m| m.match_event_indicator.0),
         entries.count()
     );
@@ -184,22 +185,31 @@ fn dump_security_status(msg_hdr: &MessageHeader, body: &[u8]) {
         eprintln!("  SecurityStatus30 truncated");
         return;
     };
-    let security_group = view
-        .security_group()
-        .map(|v| decode_ascii(v))
+    let msg = message_body_if_full!(view);
+    let security_group = msg
+        .map(|m| decode_ascii(&m.security_group))
+        .or_else(|| view.security_group_str_trimmed().map(str::to_string))
         .unwrap_or_else(|| "<N/A>".to_string());
-    let asset = view
-        .asset()
-        .map(|v| decode_ascii(v))
+    let asset = msg
+        .map(|m| decode_ascii(&m.asset))
+        .or_else(|| view.asset_str_trimmed().map(str::to_string))
         .unwrap_or_else(|| "<N/A>".to_string());
-    let msg = message_body_if_full!(view, security_status::SecurityStatus30);
+    let transact_time = msg
+        .map(|m| m.transact_time.get())
+        .or_else(|| view.transact_time_value());
+    let security_id = msg
+        .and_then(|m| decode_i32_null(m.security_id.get()))
+        .or_else(|| view.security_id_value().flatten());
+    let trade_date = msg
+        .map(|m| m.trade_date.get())
+        .or_else(|| view.trade_date_value().flatten());
     println!(
         "  SecurityStatus30: transact_time={:?} security_group={} asset={} security_id={:?} trade_date={:?} mei={:?} status={:?} halt={:?} event={:?}",
-        view.transact_time().map(|v| v.get()),
+        transact_time,
         security_group,
         asset,
-        view.security_id().and_then(|v| decode_i32_null(v.get())),
-        view.trade_date().map(|v| v.get()),
+        security_id,
+        trade_date,
         msg.map(|m| m.match_event_indicator.0),
         msg.map(|m| m.security_trading_status.0),
         msg.map(|m| m.halt_reason.0),
@@ -217,10 +227,13 @@ fn dump_incremental_order_book(msg_hdr: &MessageHeader, body: &[u8]) {
         return;
     };
 
-    let msg = message_body_if_full!(view, inc_book::MDIncrementalRefreshOrderBook47);
+    let msg = message_body_if_full!(view);
+    let transact_time = msg
+        .map(|m| m.transact_time.get())
+        .or_else(|| view.transact_time_value());
     println!(
         "  MDIncrementalRefreshOrderBook47: transact_time={:?} mei={:?} entries={}",
-        view.transact_time().map(|v| v.get()),
+        transact_time,
         msg.map(|m| m.match_event_indicator.0),
         entries.count()
     );
@@ -260,10 +273,13 @@ fn dump_trade_summary(msg_hdr: &MessageHeader, body: &[u8]) {
         return;
     };
 
-    let msg = message_body_if_full!(view, trade_summary::MDIncrementalRefreshTradeSummary48);
+    let msg = message_body_if_full!(view);
+    let transact_time = msg
+        .map(|m| m.transact_time.get())
+        .or_else(|| view.transact_time_value());
     println!(
         "  MDIncrementalRefreshTradeSummary48: transact_time={:?} mei={:?} entries={}",
-        view.transact_time().map(|v| v.get()),
+        transact_time,
         msg.map(|m| m.match_event_indicator.0),
         entries.count()
     );
@@ -328,10 +344,13 @@ fn dump_session_statistics(msg_hdr: &MessageHeader, body: &[u8]) {
         return;
     };
 
-    let msg = message_body_if_full!(view, session_stats::MDIncrementalRefreshSessionStatistics51);
+    let msg = message_body_if_full!(view);
+    let transact_time = msg
+        .map(|m| m.transact_time.get())
+        .or_else(|| view.transact_time_value());
     println!(
         "  MDIncrementalRefreshSessionStatistics51: transact_time={:?} mei={:?} entries={}",
-        view.transact_time().map(|v| v.get()),
+        transact_time,
         msg.map(|m| m.match_event_indicator.0),
         entries.count()
     );
@@ -367,13 +386,25 @@ fn dump_snapshot_order_book(msg_hdr: &MessageHeader, body: &[u8]) {
         return;
     };
 
+    let msg = message_body_if_full!(view);
+    let security_id = msg
+        .map(|m| m.security_id.get())
+        .or_else(|| view.security_id_value());
+    let current_chunk = msg
+        .map(|m| m.current_chunk.get())
+        .or_else(|| view.current_chunk_value());
+    let no_chunks = msg
+        .map(|m| m.no_chunks.get())
+        .or_else(|| view.no_chunks_value());
+    let last_msg_seq_num_processed = msg
+        .map(|m| m.last_msg_seq_num_processed.get())
+        .or_else(|| view.last_msg_seq_num_processed_value());
+    let transact_time = msg
+        .map(|m| m.transact_time.get())
+        .or_else(|| view.transact_time_value());
     println!(
         "  SnapshotFullRefreshOrderBook53: sec_id={:?} chunk {:?}/{:?} last_seq={:?} transact_time={:?}",
-        view.security_id().map(|v| v.get()),
-        view.current_chunk().map(|v| v.get()),
-        view.no_chunks().map(|v| v.get()),
-        view.last_msg_seq_num_processed().map(|v| v.get()),
-        view.transact_time().map(|v| v.get())
+        security_id, current_chunk, no_chunks, last_msg_seq_num_processed, transact_time
     );
 
     let mut iter = entries.iter();
@@ -407,11 +438,17 @@ fn dump_top_orders_snapshot(msg_hdr: &MessageHeader, body: &[u8]) {
         return;
     };
 
-    let msg = message_body_if_full!(view, top_orders::SnapshotRefreshTopOrders59);
+    let msg = message_body_if_full!(view);
+    let security_id = msg
+        .map(|m| m.security_id.get())
+        .or_else(|| view.security_id_value());
+    let transact_time = msg
+        .map(|m| m.transact_time.get())
+        .or_else(|| view.transact_time_value());
     println!(
         "  SnapshotRefreshTopOrders59: sec_id={:?} transact_time={:?} mei={:?} entries={}",
-        view.security_id().map(|v| v.get()),
-        view.transact_time().map(|v| v.get()),
+        security_id,
+        transact_time,
         msg.map(|m| m.match_event_indicator.0),
         entries.count()
     );

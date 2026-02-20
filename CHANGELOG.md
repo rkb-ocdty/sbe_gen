@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added
+- Message `*View` APIs now generate comprehensive schema-evolution helpers:
+  - full field coverage for fixed-block fields (including previously skipped enum/set fields such as `security_update_action`),
+  - value-level accessors (`field_value()`),
+  - required-field helpers (`field_required() -> Result<_, DecodeFieldError>`),
+  - enum convenience accessors (`field_enum()`),
+  - nullable-composite passthrough helpers (e.g. `field_mantissa_opt()`),
+  - fixed-byte-string helpers (`field_bytes()`, `field_str()`, `field_str_trimmed()`),
+  - `view.is_fixed_layout()` for one-shot fixed-layout fast-path checks.
+- Generated message modules now include `DecodeFieldError` for required/nullable fallback decode flows.
+
+### Changed
+- Fixed type-size/layout resolution for enum/set encoding aliases, so view/accessor generation no longer drops affected fields.
+- Added `#[inline]` on newly generated tiny helper methods and enum `as_enum()` methods.
+
+### Documentation
+- Updated top-level docs and CME example docs to use `view.is_fixed_layout()` in fixed-layout fast-path guidance.
+- Updated CME example decode flow to prefer fixed-layout direct-body reads, with simplified view-helper fallback for schema evolution.
+
 ## 0.6.0
 
 ### Added

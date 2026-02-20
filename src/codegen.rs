@@ -473,7 +473,7 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                     if let Some(raw_expr) = scalar_expr("self.0", &rust_type) {
                         let enum_name = format!("{}Enum", name);
                         code.push_str(&format!(
-                            "    pub fn as_enum(self) -> Option<{enum_name}> {{\n        let raw = {raw_expr};\n        match raw {{\n",
+                            "    #[inline]\n    pub fn as_enum(self) -> Option<{enum_name}> {{\n        let raw = {raw_expr};\n        match raw {{\n",
                             enum_name = enum_name,
                             raw_expr = raw_expr
                         ));
@@ -688,6 +688,15 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     let data_fields = message_data(msg);
     let has_group_data = groups.iter().any(|g| group_has_var_data(g));
     let has_var_data = has_group_data || !data_fields.is_empty();
+    let has_fixed_string_helpers = fields.iter().any(|field| {
+        if field_is_constant(field, schema) {
+            return false;
+        }
+        resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+            .as_deref()
+            .and_then(parse_u8_array_len)
+            .is_some()
+    });
     let msg_block_length = message_block_length(msg, schema, opts);
     let field_layouts = layout_fields(&fields, schema, opts);
     let _offsets_present = fields.iter().any(|f| f.offset.is_some());
@@ -702,19 +711,22 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     ));
     code.push_str("use crate::types::*;\n");
     code.push_str("use crate::message_header::MessageHeader;\n\n");
-    if has_var_data {
+    if has_var_data || has_fixed_string_helpers {
         code.push_str("use core::str;\n\n");
     }
     code.push_str(&format!("const ENDIAN: &str = \"{}\";\n\n", opts.endian));
     code.push_str(
         "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum EncodeIntoError {\n    BufferTooSmall { required: usize, available: usize },\n    LengthOverflow { len: usize, max: usize },\n    InvalidState(&'static str),\n}\n\n",
     );
+    code.push_str(
+        "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum DecodeFieldError {\n    MissingField(&'static str),\n    NullValue(&'static str),\n}\n\n",
+    );
     if has_var_data {
         code.push_str("#[derive(Debug, Clone, Copy)]\n");
         code.push_str(
             "pub struct VarData<'a> {\n    pub len: usize,\n    pub bytes: &'a [u8],\n}\n\n",
         );
-        code.push_str("impl<'a> VarData<'a> {\n    pub fn as_str(&self) -> Option<&'a str> { str::from_utf8(self.bytes).ok() }\n}\n\n");
+        code.push_str("impl<'a> VarData<'a> {\n    #[inline]\n    pub fn as_str(&self) -> Option<&'a str> { str::from_utf8(self.bytes).ok() }\n}\n\n");
         code.push_str("#[derive(Clone, Copy)]\n");
         code.push_str("enum LengthKind { U8, U16, U32, U64 }\n\n");
         code.push_str(
@@ -742,6 +754,11 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     code.push_str(
         "fn write_bytes_into_in_bounds<T: IntoBytes + Immutable>(dst: &mut [u8], offset: usize, value: &T) {\n    let bytes = value.as_bytes();\n    let end = offset + bytes.len();\n    debug_assert!(end <= dst.len(), \"fixed field write in bounds\");\n    dst[offset..end].copy_from_slice(bytes);\n}\n\n",
     );
+    if has_fixed_string_helpers {
+        code.push_str(
+            "#[inline]\nfn trim_ascii_space_and_nul_right(mut bytes: &[u8]) -> &[u8] {\n    while let Some((&last, rest)) = bytes.split_last() {\n        if last == b' ' || last == 0 {\n            bytes = rest;\n        } else {\n            break;\n        }\n    }\n    bytes\n}\n\n",
+        );
+    }
     // struct definition
     code.push_str("#[repr(C)]\n");
     code.push_str(
@@ -834,7 +851,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
             let fn_name = d.name.to_snake_case();
             let kind = length_kind_token(length_kind_for_data(&d.ty, schema, opts));
             code.push_str(&format!(
-                "    pub fn parse_{}<'a>(&self, buf: &'a [u8]) -> Option<(VarData<'a>, &'a [u8])> {{\n        parse_var_data(buf, {})\n    }}\n",
+                "    #[inline]\n    pub fn parse_{}<'a>(&self, buf: &'a [u8]) -> Option<(VarData<'a>, &'a [u8])> {{\n        parse_var_data(buf, {})\n    }}\n",
                 fn_name, kind
             ));
         }
@@ -1064,6 +1081,10 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
         msg.name, msg.name
     ));
     code.push_str(&format!("impl<'a> {}View<'a> {{\n", msg.name));
+    code.push_str(&format!(
+        "    #[inline]\n    pub fn is_fixed_layout(&self) -> bool {{\n        self.acting_version >= {name}::SCHEMA_VERSION\n            && self.acting_block_length >= core::mem::size_of::<{name}>()\n    }}\n",
+        name = msg.name
+    ));
     for field in &fields {
         let fname = field.name.to_snake_case();
         let since = field.since_version.unwrap_or(0);
@@ -1106,6 +1127,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
                 offset = layout.offset,
                 offset_plus = layout.offset + layout.size
             ));
+            emit_view_field_helpers(&mut code, field, schema, opts);
         }
     }
     if !data_fields.is_empty() {
@@ -1113,7 +1135,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
             let fn_name = d.name.to_snake_case();
             let kind = length_kind_token(length_kind_for_data(&d.ty, schema, opts));
             code.push_str(&format!(
-                "    pub fn parse_{name}<'b>(&self, buf: &'b [u8]) -> Option<(VarData<'b>, &'b [u8])> {{\n        parse_var_data(buf, {kind})\n    }}\n",
+                "    #[inline]\n    pub fn parse_{name}<'b>(&self, buf: &'b [u8]) -> Option<(VarData<'b>, &'b [u8])> {{\n        parse_var_data(buf, {kind})\n    }}\n",
                 name = fn_name,
                 kind = kind
             ));
@@ -1367,7 +1389,7 @@ fn type_size_bytes(
                 Some(base * length.unwrap_or(1))
             }
             TypeDef::Enum { encoding, .. } | TypeDef::Set { encoding, .. } => {
-                primitive_size_bytes(encoding)
+                encoding_primitive(encoding, &schema.types).and_then(|p| primitive_size_bytes(&p))
             }
             TypeDef::Composite { fields, .. } => {
                 let mut total = 0usize;
@@ -1395,7 +1417,7 @@ fn type_size_bytes(
             }
         }
     } else {
-        None
+        resolve_type(ty, schema, _opts, None).and_then(|resolved| resolved_size_bytes(&resolved))
     }
 }
 
@@ -2603,6 +2625,266 @@ fn push_validation_asserts(code: &mut String, field: &Field, schema: &Schema, ho
                 field = field.name
             ));
         }
+    }
+}
+
+struct ViewFieldValueInfo {
+    value_ty: String,
+    value_expr: String,
+    nullable_inner_ty: Option<String>,
+}
+
+fn parse_u8_array_len(resolved_type: &str) -> Option<usize> {
+    let trimmed = resolved_type.trim();
+    let rest = trimmed.strip_prefix('[')?;
+    let (inner, len_part) = rest.split_once(';')?;
+    if inner.trim() != "u8" {
+        return None;
+    }
+    len_part.trim().trim_end_matches(']').parse::<usize>().ok()
+}
+
+fn field_is_required(field: &Field, schema: &Schema) -> bool {
+    match field.presence.as_deref() {
+        Some("required") => true,
+        Some("optional") | Some("constant") => false,
+        _ => !field_is_optional(field, schema),
+    }
+}
+
+fn view_field_value_info(
+    field: &Field,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) -> Option<ViewFieldValueInfo> {
+    let resolved = resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())?;
+    if resolved.trim().starts_with('[') {
+        return Some(ViewFieldValueInfo {
+            value_ty: resolved,
+            value_expr: "*value".to_string(),
+            nullable_inner_ty: None,
+        });
+    }
+
+    if let Some(TypeDef::Enum { encoding, .. } | TypeDef::Set { encoding, .. }) =
+        schema.types.get(&field.ty)
+    {
+        let prim = encoding_primitive(encoding, &schema.types).unwrap_or_else(|| encoding.clone());
+        let explicit_null = field_null_value(field, schema);
+        let is_optional = field_is_optional(field, schema);
+        let use_default = explicit_null.is_none() && is_optional;
+        if (is_optional || explicit_null.is_some())
+            && let Some(inner_rust) =
+                primitive_to_rust_endian(&prim, &opts.endian, field.byte_order.as_deref())
+            && let Some(raw_expr) = scalar_expr("value.0", &inner_rust)
+            && let Some(host_ty) = optional_host_type(&prim)
+            && let Some(cond) = null_cond_for_primitive(&prim, host_ty, explicit_null, use_default)
+        {
+            return Some(ViewFieldValueInfo {
+                value_ty: format!("Option<{}>", field.ty),
+                value_expr: format!(
+                    "{{ let raw = {raw}; if {cond} {{ None }} else {{ Some(*value) }} }}",
+                    raw = raw_expr,
+                    cond = cond
+                ),
+                nullable_inner_ty: Some(field.ty.clone()),
+            });
+        }
+        return Some(ViewFieldValueInfo {
+            value_ty: field.ty.clone(),
+            value_expr: "*value".to_string(),
+            nullable_inner_ty: None,
+        });
+    }
+
+    if let Some(prim) = field_primitive(field, schema)
+        && let Some(inner_rust) =
+            primitive_to_rust_endian(&prim, &opts.endian, field.byte_order.as_deref())
+        && let Some(raw_expr) = scalar_expr("(*value)", &inner_rust)
+        && let Some(host_ty_raw) = optional_host_type(&prim)
+    {
+        let host_ty = host_ty_raw.to_string();
+        let explicit_null = field_null_value(field, schema);
+        let is_optional = field_is_optional(field, schema);
+        let use_default = explicit_null.is_none() && is_optional;
+        if (is_optional || explicit_null.is_some())
+            && let Some(cond) = null_cond_for_primitive(&prim, &host_ty, explicit_null, use_default)
+        {
+            return Some(ViewFieldValueInfo {
+                value_ty: format!("Option<{}>", host_ty),
+                value_expr: format!(
+                    "{{ let raw = {raw}; if {cond} {{ None }} else {{ Some(raw) }} }}",
+                    raw = raw_expr,
+                    cond = cond
+                ),
+                nullable_inner_ty: Some(host_ty),
+            });
+        }
+        return Some(ViewFieldValueInfo {
+            value_ty: host_ty,
+            value_expr: raw_expr,
+            nullable_inner_ty: None,
+        });
+    }
+
+    Some(ViewFieldValueInfo {
+        value_ty: resolved,
+        value_expr: "*value".to_string(),
+        nullable_inner_ty: None,
+    })
+}
+
+fn composite_optional_view_helpers(
+    ty: &str,
+    schema: &Schema,
+    _opts: &GeneratorOptions,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Some(TypeDef::Composite { fields, .. }) = schema.types.get(ty) else {
+        return out;
+    };
+
+    for field in fields {
+        match field {
+            CompositeField::Type {
+                name,
+                primitive,
+                length,
+                presence,
+                null_value,
+                ..
+            } => {
+                if presence.as_deref() == Some("constant") {
+                    continue;
+                }
+                let is_optional = match presence.as_deref() {
+                    Some("optional") => true,
+                    Some("required") => false,
+                    _ => null_value.is_some(),
+                };
+                if !is_optional {
+                    continue;
+                }
+                if let Some(len) = length
+                    && *len > 1
+                {
+                    continue;
+                }
+                let Some(host_ty) = optional_host_type(primitive) else {
+                    continue;
+                };
+                let Some(_) =
+                    null_cond_for_primitive(primitive, host_ty, null_value.as_deref(), true)
+                else {
+                    continue;
+                };
+                out.push((format!("{}_opt", name.to_snake_case()), host_ty.to_string()));
+            }
+            CompositeField::Ref { name, ty } => {
+                if !type_is_optional(ty, schema) {
+                    continue;
+                }
+                if let Some(len) = type_length(ty, schema)
+                    && len > 1
+                {
+                    continue;
+                }
+                let Some(prim) = type_primitive(ty, schema) else {
+                    continue;
+                };
+                let Some(host_ty) = optional_host_type(prim) else {
+                    continue;
+                };
+                let Some(_) =
+                    null_cond_for_primitive(prim, host_ty, type_null_value(ty, schema), true)
+                else {
+                    continue;
+                };
+                out.push((format!("{}_opt", name.to_snake_case()), host_ty.to_string()));
+            }
+        }
+    }
+    out
+}
+
+fn emit_view_field_helpers(
+    code: &mut String,
+    field: &Field,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) {
+    let fname = field.name.to_snake_case();
+    let Some(value_info) = view_field_value_info(field, schema, opts) else {
+        return;
+    };
+
+    code.push_str(&format!(
+        "    #[inline]\n    pub fn {fname}_value(&self) -> Option<{ty}> {{\n        let value = self.{fname}()?;\n        Some({expr})\n    }}\n",
+        fname = fname,
+        ty = value_info.value_ty,
+        expr = value_info.value_expr,
+    ));
+
+    if field_is_required(field, schema) {
+        if let Some(inner_ty) = value_info.nullable_inner_ty.as_deref() {
+            code.push_str(&format!(
+                "    #[inline]\n    pub fn {fname}_required(&self) -> Result<{inner_ty}, DecodeFieldError> {{\n        let value = self.{fname}_value().ok_or(DecodeFieldError::MissingField(\"{fname}\"))?;\n        value.ok_or(DecodeFieldError::NullValue(\"{fname}\"))\n    }}\n",
+                fname = fname,
+                inner_ty = inner_ty
+            ));
+        } else {
+            code.push_str(&format!(
+                "    #[inline]\n    pub fn {fname}_required(&self) -> Result<{ty}, DecodeFieldError> {{\n        self.{fname}_value().ok_or(DecodeFieldError::MissingField(\"{fname}\"))\n    }}\n",
+                fname = fname,
+                ty = value_info.value_ty
+            ));
+        }
+    }
+
+    if let Some(TypeDef::Enum { values, .. }) = schema.types.get(&field.ty)
+        && !values.is_empty()
+    {
+        let enum_name = format!("{}Enum", field.ty);
+        if value_info.nullable_inner_ty.as_deref() == Some(field.ty.as_str()) {
+            code.push_str(&format!(
+                "    #[inline]\n    pub fn {fname}_enum(&self) -> Option<{enum_name}> {{\n        let value = self.{fname}_value()?;\n        value.and_then(|raw| raw.as_enum())\n    }}\n",
+                fname = fname,
+                enum_name = enum_name
+            ));
+        } else {
+            code.push_str(&format!(
+                "    #[inline]\n    pub fn {fname}_enum(&self) -> Option<{enum_name}> {{\n        self.{fname}_value().and_then(|raw| raw.as_enum())\n    }}\n",
+                fname = fname,
+                enum_name = enum_name
+            ));
+        }
+    }
+
+    for (sub_method, ret_ty) in composite_optional_view_helpers(&field.ty, schema, opts) {
+        code.push_str(&format!(
+            "    #[inline]\n    pub fn {fname}_{sub_method}(&self) -> Option<{ret_ty}> {{\n        self.{fname}().and_then(|value| value.{sub_method}())\n    }}\n",
+            fname = fname,
+            sub_method = sub_method,
+            ret_ty = ret_ty
+        ));
+    }
+
+    if let Some(resolved) = resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+        && let Some(len) = parse_u8_array_len(&resolved)
+    {
+        code.push_str(&format!(
+            "    #[inline(always)]\n    pub fn {fname}_bytes(&self) -> Option<&[u8; {len}]> {{\n        self.{fname}()\n    }}\n",
+            fname = fname,
+            len = len
+        ));
+        code.push_str(&format!(
+            "    #[inline]\n    pub fn {fname}_str(&self) -> Option<&str> {{\n        let bytes = self.{fname}_bytes()?;\n        str::from_utf8(bytes).ok()\n    }}\n",
+            fname = fname
+        ));
+        code.push_str(&format!(
+            "    #[inline]\n    pub fn {fname}_str_trimmed(&self) -> Option<&str> {{\n        let bytes = self.{fname}_bytes()?;\n        let trimmed = trim_ascii_space_and_nul_right(bytes);\n        str::from_utf8(trimmed).ok()\n    }}\n",
+            fname = fname
+        ));
     }
 }
 
