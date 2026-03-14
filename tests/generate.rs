@@ -55,6 +55,22 @@ fn rejects_unsupported_field_types_instead_of_silent_drops() {
 }
 
 #[test]
+fn rejects_unsupported_var_data_length_types() {
+    let xml = r#"
+        <messageSchema package="test">
+            <message name="BadData" id="1">
+                <data name="blob" id="1" type="UnknownLenType" />
+            </message>
+        </messageSchema>
+    "#;
+
+    let err = generate(xml, &GeneratorOptions::default()).expect_err("unsupported data type");
+    let msg = err.to_string();
+    assert!(msg.contains("unsupported var-data length type 'UnknownLenType'"));
+    assert!(msg.contains("message 'BadData' data 'blob'"));
+}
+
+#[test]
 fn generates_groups_and_var_data() {
     let xml = r#"
         <messageSchema package="test">
@@ -88,6 +104,30 @@ fn generates_groups_and_var_data() {
     assert!(book_rs.contains("VarData<'a>"));
     assert!(book_rs.contains("pub fn parse_raw"));
     assert!(module_map.contains_key("message_header.rs"));
+}
+
+#[test]
+fn var_data_length_composite_refs_are_supported() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <type name="LenRef" primitiveType="uint16"/>
+                <composite name="VarRefEncoding">
+                    <ref name="length" type="LenRef"/>
+                    <type name="varData" primitiveType="uint8" length="0"/>
+                </composite>
+            </types>
+            <message name="HasData" id="1" blockLength="0">
+                <data name="payload" id="1" type="VarRefEncoding" />
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let msg_rs = module_map.get("has_data.rs").expect("has_data.rs emitted");
+    assert!(msg_rs.contains("parse_var_data(buf, LengthKind::U16)"));
+    assert!(msg_rs.contains("write_var_data(&mut self.buf, bytes, LengthKind::U16, ENDIAN)"));
 }
 
 #[test]

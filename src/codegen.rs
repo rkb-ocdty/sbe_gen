@@ -266,7 +266,10 @@ fn validate_message_types(
                 let scope = format!("message '{}' group '{}'", msg.name, group.name);
                 validate_group_types(group, schema, opts, &scope)?;
             }
-            MessageMember::Data(_) => {}
+            MessageMember::Data(data) => {
+                let scope = format!("message '{}' data '{}'", msg.name, data.name);
+                validate_var_data_type(data, schema, &scope)?;
+            }
         }
     }
     Ok(())
@@ -302,8 +305,25 @@ fn validate_group_types(
                 let nested_scope = format!("{scope} group '{}'", nested.name);
                 validate_group_types(nested, schema, opts, &nested_scope)?;
             }
-            GroupMember::Data(_) => {}
+            GroupMember::Data(data) => {
+                let data_scope = format!("{scope} data '{}'", data.name);
+                validate_var_data_type(data, schema, &data_scope)?;
+            }
         }
+    }
+    Ok(())
+}
+
+fn validate_var_data_type(
+    data: &VarDataField,
+    schema: &Schema,
+    scope: &str,
+) -> Result<(), CodegenError> {
+    if try_length_kind_for_data(&data.ty, schema).is_none() {
+        return Err(CodegenError::InvalidSchema(format!(
+            "unsupported var-data length type '{}' for {}",
+            data.ty, scope
+        )));
     }
     Ok(())
 }
@@ -1694,44 +1714,66 @@ fn primitive_length_kind(prim: &str) -> Option<LengthKind> {
     }
 }
 
-fn length_kind_for_data(ty: &str, schema: &Schema, opts: &GeneratorOptions) -> LengthKind {
+fn try_length_kind_for_data(ty: &str, schema: &Schema) -> Option<LengthKind> {
+    let mut visiting = HashSet::new();
+    try_length_kind_for_data_inner(ty, schema, &mut visiting)
+}
+
+fn try_length_kind_for_data_inner(
+    ty: &str,
+    schema: &Schema,
+    visiting: &mut HashSet<String>,
+) -> Option<LengthKind> {
     if let Some(kind) = primitive_length_kind(ty) {
-        return kind;
+        return Some(kind);
     }
-    if let Some(td) = schema.types.get(ty) {
-        match td {
-            TypeDef::Primitive { primitive, .. } => {
-                if let Some(kind) = primitive_length_kind(primitive) {
-                    return kind;
-                }
-            }
-            TypeDef::Enum { encoding, .. } | TypeDef::Set { encoding, .. } => {
-                if let Some(kind) = primitive_length_kind(encoding) {
-                    return kind;
-                }
-            }
-            TypeDef::Composite { fields, .. } => {
-                for f in fields {
-                    if let CompositeField::Type {
+
+    let td = schema.types.get(ty)?;
+    if !visiting.insert(ty.to_string()) {
+        return None;
+    }
+
+    let result = match td {
+        TypeDef::Primitive { primitive, .. } => primitive_length_kind(primitive),
+        TypeDef::Enum { encoding, .. } | TypeDef::Set { encoding, .. } => {
+            try_length_kind_for_data_inner(encoding, schema, visiting)
+        }
+        TypeDef::Composite { fields, .. } => {
+            let mut out = None;
+            for f in fields {
+                match f {
+                    CompositeField::Type {
                         primitive,
                         presence,
                         ..
-                    } = f
-                    {
+                    } => {
                         if presence.as_deref() == Some("constant") {
                             continue;
                         }
                         if let Some(kind) = primitive_length_kind(primitive) {
-                            return kind;
+                            out = Some(kind);
+                            break;
+                        }
+                    }
+                    CompositeField::Ref { ty, .. } => {
+                        if let Some(kind) = try_length_kind_for_data_inner(ty, schema, visiting) {
+                            out = Some(kind);
+                            break;
                         }
                     }
                 }
             }
+            out
         }
-    }
-    // fall back to little length prefix if unknown
-    let _ = opts;
-    LengthKind::U8
+    };
+
+    visiting.remove(ty);
+    result
+}
+
+fn length_kind_for_data(ty: &str, schema: &Schema, _opts: &GeneratorOptions) -> LengthKind {
+    // generate() validates all data-field encodings ahead of code emission.
+    try_length_kind_for_data(ty, schema).unwrap_or(LengthKind::U8)
 }
 
 fn length_kind_token(kind: LengthKind) -> &'static str {
