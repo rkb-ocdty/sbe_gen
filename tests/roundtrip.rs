@@ -40,7 +40,7 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
                     entry.side(2);
                     entry.note(b"ask").expect("note");
                 });
-            });
+            }).expect("legs");
             builder.comment(b"ok").expect("comment");
 
             let framed = builder.finish_with_header();

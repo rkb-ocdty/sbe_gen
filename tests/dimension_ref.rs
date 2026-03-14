@@ -34,7 +34,7 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
                 items.entry(|entry| {
                     entry.id(22);
                 });
-            });
+            }).expect("items");
 
             let body = builder.finish();
             let (msg, rest) = DimRef::parse_prefix(&body).expect("parse message");

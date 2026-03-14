@@ -278,6 +278,20 @@ fn validate_group_types(
     opts: &GeneratorOptions,
     scope: &str,
 ) -> Result<(), CodegenError> {
+    let dims = dimension_fields(schema, &group.dimension_type, opts);
+    if !is_supported_dimension_int_type(&dims.block_field_ty) {
+        return Err(CodegenError::InvalidSchema(format!(
+            "unsupported blockLength type '{}' in {}",
+            dims.block_field_ty, scope
+        )));
+    }
+    if !is_supported_dimension_int_type(&dims.count_field_ty) {
+        return Err(CodegenError::InvalidSchema(format!(
+            "unsupported numInGroup/count type '{}' in {}",
+            dims.count_field_ty, scope
+        )));
+    }
+
     for member in &group.members {
         match member {
             GroupMember::Field(field) => {
@@ -292,6 +306,25 @@ fn validate_group_types(
         }
     }
     Ok(())
+}
+
+fn is_supported_dimension_int_type(ty: &str) -> bool {
+    matches!(
+        ty.rsplit("::").next().unwrap_or(ty),
+        "u8" | "i8"
+            | "u16"
+            | "i16"
+            | "u32"
+            | "i32"
+            | "u64"
+            | "i64"
+            | "U16"
+            | "I16"
+            | "U32"
+            | "I32"
+            | "U64"
+            | "I64"
+    )
 }
 
 fn validate_field_type(
@@ -385,10 +418,8 @@ fn validate_type_reference(
                         name: field_name,
                         ty: ref_ty,
                     } => {
-                        let ref_scope = format!(
-                            "{} via composite '{}' field '{}'",
-                            scope, name, field_name
-                        );
+                        let ref_scope =
+                            format!("{} via composite '{}' field '{}'", scope, name, field_name);
                         validate_type_reference(ref_ty, schema, opts, &ref_scope, visiting)?;
                     }
                 }
@@ -883,10 +914,13 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     }
     code.push_str(&format!("const ENDIAN: &str = \"{}\";\n\n", opts.endian));
     code.push_str(
-        "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum EncodeIntoError {\n    BufferTooSmall { required: usize, available: usize },\n    LengthOverflow { len: usize, max: usize },\n    InvalidState(&'static str),\n}\n\n",
+        "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum EncodeIntoError {\n    BufferTooSmall { required: usize, available: usize },\n    LengthOverflow { len: usize, max: usize },\n    CountOverflow { count: usize, max: usize },\n    InvalidState(&'static str),\n}\n\n",
     );
     code.push_str(
         "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum DecodeFieldError {\n    MissingField(&'static str),\n    NullValue(&'static str),\n}\n\n",
+    );
+    code.push_str(
+        "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum EncodeError {\n    LengthOverflow { len: usize, max: usize },\n    CountOverflow { count: usize, max: usize },\n}\n\n",
     );
     if has_var_data {
         code.push_str("#[derive(Debug, Clone, Copy)]\n");
@@ -897,14 +931,11 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         code.push_str("#[derive(Clone, Copy)]\n");
         code.push_str("enum LengthKind { U8, U16, U32, U64 }\n\n");
         code.push_str(
-            "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub struct EncodeError {\n    pub len: usize,\n    pub max: usize,\n}\n\n",
-        );
-        code.push_str(
             "fn length_max(kind: LengthKind) -> usize {\n    match kind {\n        LengthKind::U8 => u8::MAX as usize,\n        LengthKind::U16 => u16::MAX as usize,\n        LengthKind::U32 => u32::MAX as usize,\n        LengthKind::U64 => u64::MAX as usize,\n    }\n}\n\n",
         );
         code.push_str("fn read_length(kind: LengthKind, buf: &[u8]) -> Option<(usize, &[u8])> {\n    match kind {\n        LengthKind::U8 => {\n            let (&b, rest) = buf.split_first()?;\n            Some((b as usize, rest))\n        }\n        LengthKind::U16 => {\n            let (v, rest) = Ref::<_, U16>::from_prefix(buf).ok()?;\n            Some((v.get() as usize, rest))\n        }\n        LengthKind::U32 => {\n            let (v, rest) = Ref::<_, U32>::from_prefix(buf).ok()?;\n            Some((v.get() as usize, rest))\n        }\n        LengthKind::U64 => {\n            let (v, rest) = Ref::<_, U64>::from_prefix(buf).ok()?;\n            Some((v.get() as usize, rest))\n        }\n    }\n}\n\n");
         code.push_str("fn parse_var_data<'a>(buf: &'a [u8], kind: LengthKind) -> Option<(VarData<'a>, &'a [u8])> {\n    let (len, rest) = read_length(kind, buf)?;\n    if rest.len() < len { return None; }\n    let (bytes, tail) = rest.split_at(len);\n    Some((VarData { len, bytes }, tail))\n}\n\n");
-        code.push_str("fn write_length(buf: &mut Vec<u8>, len: usize, kind: LengthKind, endian: &str) -> Result<(), EncodeError> {\n    let max = length_max(kind);\n    if len > max { return Err(EncodeError { len, max }); }\n    match kind {\n        LengthKind::U8 => buf.push(len as u8),\n        LengthKind::U16 => {\n            let v = len as u16;\n            if endian == \"big\" { buf.extend_from_slice(&v.to_be_bytes()); } else { buf.extend_from_slice(&v.to_le_bytes()); }\n        }\n        LengthKind::U32 => {\n            let v = len as u32;\n            if endian == \"big\" { buf.extend_from_slice(&v.to_be_bytes()); } else { buf.extend_from_slice(&v.to_le_bytes()); }\n        }\n        LengthKind::U64 => {\n            let v = len as u64;\n            if endian == \"big\" { buf.extend_from_slice(&v.to_be_bytes()); } else { buf.extend_from_slice(&v.to_le_bytes()); }\n        }\n    }\n    Ok(())\n}\n\n");
+        code.push_str("fn write_length(buf: &mut Vec<u8>, len: usize, kind: LengthKind, endian: &str) -> Result<(), EncodeError> {\n    let max = length_max(kind);\n    if len > max { return Err(EncodeError::LengthOverflow { len, max }); }\n    match kind {\n        LengthKind::U8 => buf.push(len as u8),\n        LengthKind::U16 => {\n            let v = len as u16;\n            if endian == \"big\" { buf.extend_from_slice(&v.to_be_bytes()); } else { buf.extend_from_slice(&v.to_le_bytes()); }\n        }\n        LengthKind::U32 => {\n            let v = len as u32;\n            if endian == \"big\" { buf.extend_from_slice(&v.to_be_bytes()); } else { buf.extend_from_slice(&v.to_le_bytes()); }\n        }\n        LengthKind::U64 => {\n            let v = len as u64;\n            if endian == \"big\" { buf.extend_from_slice(&v.to_be_bytes()); } else { buf.extend_from_slice(&v.to_le_bytes()); }\n        }\n    }\n    Ok(())\n}\n\n");
         code.push_str("fn write_var_data(buf: &mut Vec<u8>, bytes: &[u8], kind: LengthKind, endian: &str) -> Result<(), EncodeError> {\n    write_length(buf, bytes.len(), kind, endian)?;\n    buf.extend_from_slice(bytes);\n    Ok(())\n}\n\n");
         code.push_str("fn write_length_into(dst: &mut [u8], offset: usize, len: usize, kind: LengthKind, endian: &str) -> Result<usize, EncodeIntoError> {\n    let max = length_max(kind);\n    if len > max { return Err(EncodeIntoError::LengthOverflow { len, max }); }\n    match kind {\n        LengthKind::U8 => {\n            let end = offset.checked_add(1).ok_or(EncodeIntoError::InvalidState(\"length offset overflow\"))?;\n            if end > dst.len() { return Err(EncodeIntoError::BufferTooSmall { required: end, available: dst.len() }); }\n            dst[offset] = len as u8;\n            Ok(1)\n        }\n        LengthKind::U16 => {\n            let end = offset.checked_add(2).ok_or(EncodeIntoError::InvalidState(\"length offset overflow\"))?;\n            if end > dst.len() { return Err(EncodeIntoError::BufferTooSmall { required: end, available: dst.len() }); }\n            let v = len as u16;\n            if endian == \"big\" { dst[offset..end].copy_from_slice(&v.to_be_bytes()); } else { dst[offset..end].copy_from_slice(&v.to_le_bytes()); }\n            Ok(2)\n        }\n        LengthKind::U32 => {\n            let end = offset.checked_add(4).ok_or(EncodeIntoError::InvalidState(\"length offset overflow\"))?;\n            if end > dst.len() { return Err(EncodeIntoError::BufferTooSmall { required: end, available: dst.len() }); }\n            let v = len as u32;\n            if endian == \"big\" { dst[offset..end].copy_from_slice(&v.to_be_bytes()); } else { dst[offset..end].copy_from_slice(&v.to_le_bytes()); }\n            Ok(4)\n        }\n        LengthKind::U64 => {\n            let end = offset.checked_add(8).ok_or(EncodeIntoError::InvalidState(\"length offset overflow\"))?;\n            if end > dst.len() { return Err(EncodeIntoError::BufferTooSmall { required: end, available: dst.len() }); }\n            let v = len as u64;\n            if endian == \"big\" { dst[offset..end].copy_from_slice(&v.to_be_bytes()); } else { dst[offset..end].copy_from_slice(&v.to_le_bytes()); }\n            Ok(8)\n        }\n    }\n}\n\n");
         code.push_str("fn write_var_data_into(dst: &mut [u8], offset: usize, bytes: &[u8], kind: LengthKind, endian: &str) -> Result<usize, EncodeIntoError> {\n    let prefix = write_length_into(dst, offset, bytes.len(), kind, endian)?;\n    let data_start = offset.checked_add(prefix).ok_or(EncodeIntoError::InvalidState(\"var data offset overflow\"))?;\n    let data_end = data_start.checked_add(bytes.len()).ok_or(EncodeIntoError::InvalidState(\"var data length overflow\"))?;\n    if data_end > dst.len() { return Err(EncodeIntoError::BufferTooSmall { required: data_end, available: dst.len() }); }\n    dst[data_start..data_end].copy_from_slice(bytes);\n    Ok(prefix + bytes.len())\n}\n\n");
@@ -1111,7 +1142,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         let builder_ty = format!("{}GroupBuilder", g.name);
         let gname = g.name.to_snake_case();
         code.push_str(&format!(
-            "    pub fn {name}<F>(&mut self, f: F) -> &mut Self\n    where\n        F: FnOnce(&mut {builder_ty}),\n    {{\n        let mut builder = {builder_ty}::new(&mut self.buf);\n        f(&mut builder);\n        builder.finish();\n        self\n    }}\n",
+            "    pub fn {name}<F>(&mut self, f: F) -> Result<&mut Self, EncodeError>\n    where\n        F: FnOnce(&mut {builder_ty}),\n    {{\n        let mut builder = {builder_ty}::new(&mut self.buf);\n        f(&mut builder);\n        builder.finish()?;\n        Ok(self)\n    }}\n",
             name = gname,
             builder_ty = builder_ty
         ));
@@ -1741,6 +1772,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     let has_nested = !g_nested.is_empty();
     let has_any_var = has_data || has_nested;
     let dim = dimension_fields(schema, &g.dimension_type, opts);
+    let count_max = count_max_expr(&dim.count_field_ty);
     let block_len_expr = if let Some(bl) = g.block_length {
         bl.to_string()
     } else {
@@ -1964,7 +1996,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         code.push_str("}\n\n");
     }
     code.push_str(&format!(
-        "pub struct {}<'a> {{\n    buf: &'a mut Vec<u8>,\n    header_start: usize,\n    count: usize,\n}}\n\n",
+        "pub struct {}<'a> {{\n    buf: &'a mut Vec<u8>,\n    header_start: usize,\n    count: usize,\n    overflow: usize,\n}}\n\n",
         group_builder
     ));
     code.push_str(&format!(
@@ -1980,22 +2012,26 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         "    pub const HEADER_SIZE: usize = {};\n",
         dim_size
     ));
+    code.push_str(&format!(
+        "    pub const MAX_COUNT: usize = {};\n",
+        count_max
+    ));
     let block_expr = builder_value_expr("Self::BLOCK_LENGTH", &dim.block_field_ty);
     let count_expr = builder_value_expr("0", &dim.count_field_ty);
     code.push_str(&format!(
-        "    pub fn new(buf: &'a mut Vec<u8>) -> Self {{\n        let header_start = buf.len();\n        buf.resize(header_start + Self::HEADER_SIZE, 0);\n        let block_len = {block_expr};\n        write_bytes_at(buf, header_start + {block_off}, &block_len);\n        let count = {count_expr};\n        write_bytes_at(buf, header_start + {count_off}, &count);\n        Self {{ buf, header_start, count: 0 }}\n    }}\n",
+        "    pub fn new(buf: &'a mut Vec<u8>) -> Self {{\n        let header_start = buf.len();\n        buf.resize(header_start + Self::HEADER_SIZE, 0);\n        let block_len = {block_expr};\n        write_bytes_at(buf, header_start + {block_off}, &block_len);\n        let count = {count_expr};\n        write_bytes_at(buf, header_start + {count_off}, &count);\n        Self {{ buf, header_start, count: 0, overflow: 0 }}\n    }}\n",
         block_expr = block_expr,
         block_off = dim_block_offset,
         count_expr = count_expr,
         count_off = dim_count_offset
     ));
     code.push_str(&format!(
-        "    pub fn entry<F>(&mut self, f: F) -> &mut Self\n    where\n        F: FnOnce(&mut {entry_builder}),\n    {{\n        let start = self.buf.len();\n        self.buf.resize(start + Self::BLOCK_LENGTH as usize, 0);\n        let mut entry = {entry_builder} {{ buf: self.buf, start }};\n        f(&mut entry);\n        self.count += 1;\n        self\n    }}\n",
+        "    pub fn entry<F>(&mut self, f: F) -> &mut Self\n    where\n        F: FnOnce(&mut {entry_builder}),\n    {{\n        if self.count >= Self::MAX_COUNT {{\n            self.overflow = self.overflow.saturating_add(1);\n            return self;\n        }}\n        let start = self.buf.len();\n        self.buf.resize(start + Self::BLOCK_LENGTH as usize, 0);\n        let mut entry = {entry_builder} {{ buf: self.buf, start }};\n        f(&mut entry);\n        self.count += 1;\n        self\n    }}\n",
         entry_builder = entry_builder
     ));
     let count_finish_expr = count_value_expr("self.count", &dim.count_field_ty);
     code.push_str(&format!(
-        "    pub fn finish(self) {{\n        let count = {count_expr};\n        write_bytes_at(self.buf, self.header_start + {count_off}, &count);\n    }}\n",
+        "    pub fn finish(self) -> Result<(), EncodeError> {{\n        if self.overflow != 0 {{\n            return Err(EncodeError::CountOverflow {{ count: self.count.saturating_add(self.overflow), max: Self::MAX_COUNT }});\n        }}\n        if self.count > Self::MAX_COUNT {{\n            return Err(EncodeError::CountOverflow {{ count: self.count, max: Self::MAX_COUNT }});\n        }}\n        let count = {count_expr};\n        write_bytes_at(self.buf, self.header_start + {count_off}, &count);\n        Ok(())\n    }}\n",
         count_expr = count_finish_expr,
         count_off = dim_count_offset
     ));
@@ -2051,7 +2087,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         let nested_builder = format!("{}GroupBuilder", nested.name);
         let name = nested.name.to_snake_case();
         code.push_str(&format!(
-            "    pub fn {name}<F>(&mut self, f: F) -> &mut Self\n    where\n        F: FnOnce(&mut {builder}),\n    {{\n        let mut builder = {builder}::new(self.buf);\n        f(&mut builder);\n        builder.finish();\n        self\n    }}\n",
+            "    pub fn {name}<F>(&mut self, f: F) -> Result<&mut Self, EncodeError>\n    where\n        F: FnOnce(&mut {builder}),\n    {{\n        let mut builder = {builder}::new(self.buf);\n        f(&mut builder);\n        builder.finish()?;\n        Ok(self)\n    }}\n",
             name = name,
             builder = nested_builder
         ));
@@ -2084,6 +2120,10 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         dim_size
     ));
     code.push_str(&format!(
+        "    pub const MAX_COUNT: usize = {};\n",
+        count_max
+    ));
+    code.push_str(&format!(
         "    pub const ENTRY_FIXED_LEN: usize = {};\n",
         entry_fixed_required
     ));
@@ -2095,11 +2135,11 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         count_off = dim_count_offset
     ));
     code.push_str(&format!(
-        "    pub fn entry<F>(&mut self, f: F) -> Result<&mut Self, EncodeIntoError>\n    where\n        F: FnOnce(&mut {entry_encoder}<'_>) -> Result<(), EncodeIntoError>,\n    {{\n        let mut entry = {entry_encoder}::new(self.buf, self.cursor)?;\n        f(&mut entry)?;\n        self.cursor = entry.finish();\n        self.count = self.count.checked_add(1).ok_or(EncodeIntoError::InvalidState(\"group entry count overflow\"))?;\n        Ok(self)\n    }}\n",
+        "    pub fn entry<F>(&mut self, f: F) -> Result<&mut Self, EncodeIntoError>\n    where\n        F: FnOnce(&mut {entry_encoder}<'_>) -> Result<(), EncodeIntoError>,\n    {{\n        if self.count >= Self::MAX_COUNT {{\n            return Err(EncodeIntoError::CountOverflow {{ count: self.count.saturating_add(1), max: Self::MAX_COUNT }});\n        }}\n        let mut entry = {entry_encoder}::new(self.buf, self.cursor)?;\n        f(&mut entry)?;\n        self.cursor = entry.finish();\n        self.count = self.count.checked_add(1).ok_or(EncodeIntoError::InvalidState(\"group entry count overflow\"))?;\n        Ok(self)\n    }}\n",
         entry_encoder = entry_encoder
     ));
     code.push_str(&format!(
-        "    pub fn finish(self) -> Result<usize, EncodeIntoError> {{\n        let count = {count_expr};\n        write_bytes_into(self.buf, self.header_start + {count_off}, &count)?;\n        Ok(self.cursor)\n    }}\n",
+        "    pub fn finish(self) -> Result<usize, EncodeIntoError> {{\n        if self.count > Self::MAX_COUNT {{\n            return Err(EncodeIntoError::CountOverflow {{ count: self.count, max: Self::MAX_COUNT }});\n        }}\n        let count = {count_expr};\n        write_bytes_into(self.buf, self.header_start + {count_off}, &count)?;\n        Ok(self.cursor)\n    }}\n",
         count_expr = count_finish_expr,
         count_off = dim_count_offset
     ));
@@ -3547,61 +3587,41 @@ fn bit_cast_expr(bit_idx: u32, base: &str) -> String {
     }
 }
 
+fn count_max_expr(ty: &str) -> String {
+    let trimmed = ty.trim();
+    let base = trimmed.rsplit("::").next().unwrap_or(trimmed);
+    match base {
+        "U16" | "u16" => "u16::MAX as usize".to_string(),
+        "I16" | "i16" => "i16::MAX as usize".to_string(),
+        "U32" | "u32" => "u32::MAX as usize".to_string(),
+        "I32" | "i32" => "i32::MAX as usize".to_string(),
+        "U64" | "u64" => "u64::MAX as usize".to_string(),
+        "I64" | "i64" => "i64::MAX as usize".to_string(),
+        "u8" => "u8::MAX as usize".to_string(),
+        "i8" => "i8::MAX as usize".to_string(),
+        _ => "usize::MAX".to_string(),
+    }
+}
+
 fn count_value_expr(count_name: &str, ty: &str) -> String {
     let trimmed = ty.trim();
     let base = trimmed.rsplit("::").next().unwrap_or(trimmed);
     match base {
-        "U16" => format!(
-            "{}::new(u16::try_from({}).expect(\"count fits in u16\"))",
-            trimmed, count_name
-        ),
-        "I16" => format!(
-            "{}::new(i16::try_from({}).expect(\"count fits in i16\"))",
-            trimmed, count_name
-        ),
-        "U32" => format!(
-            "{}::new(u32::try_from({}).expect(\"count fits in u32\"))",
-            trimmed, count_name
-        ),
-        "I32" => format!(
-            "{}::new(i32::try_from({}).expect(\"count fits in i32\"))",
-            trimmed, count_name
-        ),
-        "U64" => format!(
-            "{}::new(u64::try_from({}).expect(\"count fits in u64\"))",
-            trimmed, count_name
-        ),
-        "I64" => format!(
-            "{}::new(i64::try_from({}).expect(\"count fits in i64\"))",
-            trimmed, count_name
-        ),
-        "u8" => format!("u8::try_from({}).expect(\"count fits in u8\")", count_name),
-        "i8" => format!("i8::try_from({}).expect(\"count fits in i8\")", count_name),
-        "u16" => format!(
-            "u16::try_from({}).expect(\"count fits in u16\")",
-            count_name
-        ),
-        "i16" => format!(
-            "i16::try_from({}).expect(\"count fits in i16\")",
-            count_name
-        ),
-        "u32" => format!(
-            "u32::try_from({}).expect(\"count fits in u32\")",
-            count_name
-        ),
-        "i32" => format!(
-            "i32::try_from({}).expect(\"count fits in i32\")",
-            count_name
-        ),
-        "u64" => format!(
-            "u64::try_from({}).expect(\"count fits in u64\")",
-            count_name
-        ),
-        "i64" => format!(
-            "i64::try_from({}).expect(\"count fits in i64\")",
-            count_name
-        ),
-        _ => format!("{}.try_into().expect(\"count fits\")", count_name),
+        "U16" => format!("{}::new({} as u16)", trimmed, count_name),
+        "I16" => format!("{}::new({} as i16)", trimmed, count_name),
+        "U32" => format!("{}::new({} as u32)", trimmed, count_name),
+        "I32" => format!("{}::new({} as i32)", trimmed, count_name),
+        "U64" => format!("{}::new({} as u64)", trimmed, count_name),
+        "I64" => format!("{}::new({} as i64)", trimmed, count_name),
+        "u8" => format!("{} as u8", count_name),
+        "i8" => format!("{} as i8", count_name),
+        "u16" => format!("{} as u16", count_name),
+        "i16" => format!("{} as i16", count_name),
+        "u32" => format!("{} as u32", count_name),
+        "i32" => format!("{} as i32", count_name),
+        "u64" => format!("{} as u64", count_name),
+        "i64" => format!("{} as i64", count_name),
+        _ => format!("{}.try_into().ok().unwrap_or_default()", count_name),
     }
 }
 

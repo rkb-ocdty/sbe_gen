@@ -402,7 +402,8 @@ fn template_47_builder_roundtrip() {
                             .security_id(body.security_id);
                     });
                 }
-            });
+            })
+            .expect("no_md_entries");
 
         let mut out = builder.finish();
         set_u8(
@@ -467,6 +468,7 @@ fn template_48_builder_roundtrip() {
                     });
                 }
             })
+            .expect("no_md_entries")
             .no_order_id_entries(|group| {
                 let iter = order_entries.iter();
                 for entry in iter {
@@ -476,7 +478,8 @@ fn template_48_builder_roundtrip() {
                         entry.order_id(body.order_id).last_qty(body.last_qty);
                     });
                 }
-            });
+            })
+            .expect("no_order_id_entries");
 
         let mut out = builder.finish();
         set_u8(
@@ -537,7 +540,8 @@ fn template_51_builder_roundtrip() {
                             .md_entry_size(body.md_entry_size);
                     });
                 }
-            });
+            })
+            .expect("no_md_entries");
 
         let mut out = builder.finish();
         set_u8(

@@ -119,7 +119,7 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
                     entry.qty(20).side(2);
                     entry.note(b"ask").expect("note");
                 });
-            });
+            }).expect("trade legs");
             trade_builder.comment(b"ok").expect("comment");
             let owned_trade = trade_builder.finish_with_header();
 

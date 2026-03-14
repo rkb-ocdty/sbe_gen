@@ -390,3 +390,33 @@ fn view_generates_fallback_value_required_enum_composite_and_string_helpers() {
     );
     assert!(def_rs.contains("pub fn trading_reference_price_mantissa_opt(&self) -> Option<i64>"));
 }
+
+#[test]
+fn group_count_overflow_is_reported_without_panics() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <composite name="groupSize8">
+                    <type name="blockLength" primitiveType="uint16"/>
+                    <type name="numInGroup" primitiveType="uint8"/>
+                </composite>
+            </types>
+            <message name="Counted" id="1" blockLength="0">
+                <group name="Items" id="2" blockLength="1" dimensionType="groupSize8">
+                    <field name="x" id="1" type="uint8" offset="0"/>
+                </group>
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let counted_rs = module_map.get("counted.rs").expect("counted.rs emitted");
+
+    assert!(counted_rs.contains("CountOverflow { count: usize, max: usize }"));
+    assert!(
+        counted_rs.contains("pub fn items<F>(&mut self, f: F) -> Result<&mut Self, EncodeError>")
+    );
+    assert!(counted_rs.contains("pub const MAX_COUNT: usize = u8::MAX as usize;"));
+    assert!(!counted_rs.contains("count fits in u8"));
+}

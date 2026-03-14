@@ -37,9 +37,9 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
                         tags.entry(|tag| {
                             tag.tag(99);
                         });
-                    });
+                    }).expect("tags");
                 });
-            });
+            }).expect("bids");
             builder.comment(b"ok").expect("comment");
 
             let body = builder.finish();
