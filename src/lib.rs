@@ -51,6 +51,8 @@ impl Default for GeneratorOptions {
 pub enum GeneratorError {
     #[error("failed to parse schema: {0}")]
     Parse(#[from] parser::ParseError),
+    #[error("code generation failed: {0}")]
+    Codegen(String),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -65,7 +67,7 @@ pub fn generate(
     opts: &GeneratorOptions,
 ) -> Result<Vec<(String, String)>, GeneratorError> {
     let schema = parser::parse_schema(schema_xml)?;
-    Ok(codegen::generate(&schema, opts))
+    codegen::generate(&schema, opts).map_err(|err| GeneratorError::Codegen(err.to_string()))
 }
 
 /// Read an XML schema and write the generated modules into a target

@@ -12,8 +12,15 @@ use crate::parser::{
 };
 use heck::ToSnakeCase;
 use std::collections::HashSet;
+use thiserror::Error;
 
 const PARSE_PREFIX_METHOD: &str = "    #[inline]\n    pub fn parse_prefix(body: &[u8]) -> Option<(&Self, &[u8])> {\n        Ref::<_, Self>::from_prefix(body)\n            .ok()\n            .map(|(r, b)| (Ref::into_ref(r), b))\n    }\n";
+
+#[derive(Debug, Error)]
+pub enum CodegenError {
+    #[error("{0}")]
+    InvalidSchema(String),
+}
 
 fn push_doc_comment(buf: &mut String, text: &str) {
     for line in text.lines() {
@@ -237,9 +244,169 @@ fn group_has_var_data(g: &Group) -> bool {
     false
 }
 
+fn validate_schema_types(schema: &Schema, opts: &GeneratorOptions) -> Result<(), CodegenError> {
+    for msg in &schema.messages {
+        validate_message_types(msg, schema, opts)?;
+    }
+    Ok(())
+}
+
+fn validate_message_types(
+    msg: &Message,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) -> Result<(), CodegenError> {
+    for member in &msg.members {
+        match member {
+            MessageMember::Field(field) => {
+                let scope = format!("message '{}' field '{}'", msg.name, field.name);
+                validate_field_type(field, schema, opts, &scope)?;
+            }
+            MessageMember::Group(group) => {
+                let scope = format!("message '{}' group '{}'", msg.name, group.name);
+                validate_group_types(group, schema, opts, &scope)?;
+            }
+            MessageMember::Data(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_group_types(
+    group: &Group,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+    scope: &str,
+) -> Result<(), CodegenError> {
+    for member in &group.members {
+        match member {
+            GroupMember::Field(field) => {
+                let field_scope = format!("{scope} field '{}'", field.name);
+                validate_field_type(field, schema, opts, &field_scope)?;
+            }
+            GroupMember::Group(nested) => {
+                let nested_scope = format!("{scope} group '{}'", nested.name);
+                validate_group_types(nested, schema, opts, &nested_scope)?;
+            }
+            GroupMember::Data(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_field_type(
+    field: &Field,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+    scope: &str,
+) -> Result<(), CodegenError> {
+    if resolve_type(&field.ty, schema, opts, field.byte_order.as_deref()).is_none() {
+        return Err(CodegenError::InvalidSchema(format!(
+            "unsupported field type '{}' for {}",
+            field.ty, scope
+        )));
+    }
+    let mut visiting = Vec::new();
+    validate_type_reference(&field.ty, schema, opts, scope, &mut visiting)
+}
+
+fn validate_type_reference(
+    ty: &str,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+    scope: &str,
+    visiting: &mut Vec<String>,
+) -> Result<(), CodegenError> {
+    if primitive_to_rust(ty, opts).is_some() {
+        return Ok(());
+    }
+
+    if visiting.iter().any(|seen| seen == ty) {
+        let mut cycle = visiting.clone();
+        cycle.push(ty.to_string());
+        return Err(CodegenError::InvalidSchema(format!(
+            "cyclic type reference in {}: {}",
+            scope,
+            cycle.join(" -> ")
+        )));
+    }
+
+    let Some(def) = schema.types.get(ty) else {
+        return Err(CodegenError::InvalidSchema(format!(
+            "unknown type '{}' referenced by {}",
+            ty, scope
+        )));
+    };
+
+    visiting.push(ty.to_string());
+    let result = match def {
+        TypeDef::Primitive { primitive, .. } => {
+            if primitive_to_rust(primitive, opts).is_none() {
+                Err(CodegenError::InvalidSchema(format!(
+                    "unsupported primitive '{}' in type '{}' used by {}",
+                    primitive, ty, scope
+                )))
+            } else {
+                Ok(())
+            }
+        }
+        TypeDef::Enum { encoding, .. } | TypeDef::Set { encoding, .. } => {
+            let Some(primitive) = encoding_primitive(encoding, &schema.types) else {
+                return Err(CodegenError::InvalidSchema(format!(
+                    "unsupported encoding type '{}' in '{}' used by {}",
+                    encoding, ty, scope
+                )));
+            };
+            if primitive_to_rust(&primitive, opts).is_none() {
+                Err(CodegenError::InvalidSchema(format!(
+                    "unsupported primitive '{}' in encoding '{}' used by {}",
+                    primitive, ty, scope
+                )))
+            } else {
+                Ok(())
+            }
+        }
+        TypeDef::Composite { name, fields, .. } => {
+            for field in fields {
+                match field {
+                    CompositeField::Type {
+                        name: field_name,
+                        primitive,
+                        ..
+                    } => {
+                        if primitive_to_rust(primitive, opts).is_none() {
+                            return Err(CodegenError::InvalidSchema(format!(
+                                "unsupported primitive '{}' in composite '{}' field '{}' used by {}",
+                                primitive, name, field_name, scope
+                            )));
+                        }
+                    }
+                    CompositeField::Ref {
+                        name: field_name,
+                        ty: ref_ty,
+                    } => {
+                        let ref_scope = format!(
+                            "{} via composite '{}' field '{}'",
+                            scope, name, field_name
+                        );
+                        validate_type_reference(ref_ty, schema, opts, &ref_scope, visiting)?;
+                    }
+                }
+            }
+            Ok(())
+        }
+    };
+    visiting.pop();
+    result
+}
+
 /// Generate a collection of `(filename, contents)` tuples for the
 /// supplied schema.
-pub fn generate(schema: &Schema, opts: &GeneratorOptions) -> Vec<(String, String)> {
+pub fn generate(
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) -> Result<Vec<(String, String)>, CodegenError> {
+    validate_schema_types(schema, opts)?;
     let mut files = Vec::new();
     // always emit a types module
     let types_code = generate_types(schema, opts);
@@ -258,7 +425,7 @@ pub fn generate(schema: &Schema, opts: &GeneratorOptions) -> Vec<(String, String
     // emit a mod.rs which links everything together
     let mod_code = generate_mod_rs(schema, opts);
     files.push(("mod.rs".to_string(), mod_code));
-    files
+    Ok(files)
 }
 
 /// Generate the content of `mod.rs` re‑exporting messages and types.

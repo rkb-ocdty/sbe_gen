@@ -39,6 +39,22 @@ fn generates_basic_schema() {
 }
 
 #[test]
+fn rejects_unsupported_field_types_instead_of_silent_drops() {
+    let xml = r#"
+        <messageSchema package="test">
+            <message name="BadMsg" id="1">
+                <field name="broken" id="1" type="uint128" />
+            </message>
+        </messageSchema>
+    "#;
+
+    let err = generate(xml, &GeneratorOptions::default()).expect_err("unsupported type must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("unsupported field type 'uint128'"));
+    assert!(msg.contains("message 'BadMsg' field 'broken'"));
+}
+
+#[test]
 fn generates_groups_and_var_data() {
     let xml = r#"
         <messageSchema package="test">
