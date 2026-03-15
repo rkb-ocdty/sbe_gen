@@ -10,7 +10,7 @@ use crate::parser::{
     CompositeField, Field, Group, GroupMember, Message, MessageMember, Schema, TypeDef,
     VarDataField,
 };
-use heck::ToSnakeCase;
+use heck::{ToSnakeCase, ToUpperCamelCase};
 use std::collections::HashSet;
 use thiserror::Error;
 
@@ -34,6 +34,106 @@ fn maybe_doc_comment(buf: &mut String, desc: &Option<String>) {
     if let Some(text) = desc.as_deref() {
         push_doc_comment(buf, text);
     }
+}
+
+const RUST_KEYWORDS: &[&str] = &[
+    "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn", "for",
+    "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
+    "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where",
+    "while", "async", "await", "dyn", "abstract", "become", "box", "do", "final", "macro",
+    "override", "priv", "typeof", "unsized", "virtual", "yield", "try", "union", "_",
+];
+
+fn sanitize_ident(name: &str) -> String {
+    let mut out = String::with_capacity(name.len().max(1));
+    let mut prev_underscore = false;
+    for (idx, ch) in name.chars().enumerate() {
+        let valid = if idx == 0 {
+            ch == '_' || ch.is_ascii_alphabetic()
+        } else {
+            ch == '_' || ch.is_ascii_alphanumeric()
+        };
+        if valid {
+            out.push(ch);
+            prev_underscore = false;
+        } else if !prev_underscore {
+            out.push('_');
+            prev_underscore = true;
+        }
+    }
+    if out.is_empty() {
+        out.push('_');
+    }
+    if out
+        .as_bytes()
+        .first()
+        .map(|b| b.is_ascii_digit())
+        .unwrap_or(false)
+    {
+        out.insert(0, '_');
+    }
+    if RUST_KEYWORDS.contains(&out.as_str()) {
+        out.push('_');
+    }
+    if out == "_" {
+        out.push('_');
+    }
+    out
+}
+
+fn snake_ident(name: &str) -> String {
+    sanitize_ident(&name.to_snake_case())
+}
+
+fn type_ident(name: &str) -> String {
+    sanitize_ident(name)
+}
+
+fn const_ident(name: &str) -> String {
+    upper_ident(&snake_ident(name))
+}
+
+fn variant_ident(name: &str) -> String {
+    sanitize_ident(&name.to_upper_camel_case())
+}
+
+fn type_with_suffix(name: &str, suffix: &str) -> String {
+    format!("{}{}", type_ident(name), suffix)
+}
+
+fn enum_name(name: &str) -> String {
+    type_with_suffix(name, "Enum")
+}
+
+fn snake_with_suffix(name: &str, suffix: &str) -> String {
+    let mut out = name.to_string();
+    if !out.ends_with('_') {
+        out.push('_');
+    }
+    out.push_str(suffix.trim_start_matches('_'));
+    sanitize_ident(&out)
+}
+
+fn upper_ident(name: &str) -> String {
+    let mut out = String::new();
+    let mut prev_underscore = false;
+    for ch in name.chars() {
+        let mapped = if ch.is_ascii_alphanumeric() {
+            ch.to_ascii_uppercase()
+        } else {
+            '_'
+        };
+        if mapped == '_' {
+            if !prev_underscore {
+                out.push('_');
+                prev_underscore = true;
+            }
+        } else {
+            out.push(mapped);
+            prev_underscore = false;
+        }
+    }
+    sanitize_ident(&out)
 }
 
 fn push_file_preamble(buf: &mut String, opts: &GeneratorOptions, default_allow: Option<&str>) {
@@ -470,7 +570,7 @@ pub fn generate(
     // emit one file per message
     for msg in &schema.messages {
         let code = generate_message(msg, schema, opts);
-        let fname = format!("{}.rs", msg.name.to_snake_case());
+        let fname = format!("{}.rs", snake_ident(&msg.name));
         files.push((fname, code));
     }
     // emit a mod.rs which links everything together
@@ -491,16 +591,18 @@ fn generate_mod_rs(schema: &Schema, opts: &GeneratorOptions) -> String {
     mod_lines.push_str("pub mod types;\n");
     mod_lines.push_str("pub mod message_header;\n");
     for msg in &schema.messages {
-        let module = msg.name.to_snake_case();
+        let module = snake_ident(&msg.name);
         mod_lines.push_str(&format!("pub mod {};\n", module));
     }
     mod_lines.push('\n');
     mod_lines.push_str("// Re‑export message types\n");
     mod_lines.push_str("pub use message_header::MessageHeader;\n");
     for msg in &schema.messages {
-        let module = msg.name.to_snake_case();
-        mod_lines.push_str(&format!("pub use {}::{};\n", module, msg.name));
-        mod_lines.push_str(&format!("pub use {}::{}Builder;\n", module, msg.name));
+        let module = snake_ident(&msg.name);
+        let msg_ty = type_ident(&msg.name);
+        let builder_ty = format!("{}Builder", msg_ty);
+        mod_lines.push_str(&format!("pub use {}::{};\n", module, msg_ty));
+        mod_lines.push_str(&format!("pub use {}::{};\n", module, builder_ty));
     }
     mod_lines
 }
@@ -543,6 +645,7 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                 constant,
                 description,
             } => {
+                let type_name = type_ident(name);
                 let rust_type = primitive_to_rust(primitive, opts);
                 if rust_type.is_none() {
                     continue;
@@ -553,7 +656,10 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                 let is_optional = presence.as_deref() == Some("optional");
                 let mut has_alias = false;
                 if let Some(len) = length {
-                    code.push_str(&format!("pub type {} = [{}; {}];\n", name, rust_type, len));
+                    code.push_str(&format!(
+                        "pub type {} = [{}; {}];\n",
+                        type_name, rust_type, len
+                    ));
                     has_alias = true;
                 } else if presence.as_deref() == Some("constant") {
                     if used_types.contains(name) {
@@ -563,31 +669,35 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                             .cloned()
                             .or_else(|| constant_type_alias_from_schema(name, schema))
                             .unwrap_or_else(|| rust_type.clone());
-                        code.push_str(&format!("pub type {} = {};\n", name, alias));
+                        code.push_str(&format!(
+                            "pub type {} = {};\n",
+                            type_name,
+                            type_ident(&alias)
+                        ));
                         has_alias = true;
                     } else if let Some(value) = constant {
                         if let Some(expr) = const_scalar_expr(primitive, &rust_type, value) {
                             code.push_str(&format!(
                                 "pub const {}: {} = {};\n",
-                                name, rust_type, expr
+                                type_name, rust_type, expr
                             ));
                         } else {
                             code.push_str(&format!(
                                 "pub const {}: {} = {} as {};\n",
-                                name, rust_type, value, rust_type
+                                type_name, rust_type, value, rust_type
                             ));
                         }
                     } else {
                         code.push_str(&format!(
                             "pub const {}: {} = {} as {};\n",
-                            name,
+                            type_name,
                             rust_type,
                             primitive_default_value(primitive),
                             rust_type
                         ));
                     }
                 } else {
-                    code.push_str(&format!("pub type {} = {};\n", name, rust_type));
+                    code.push_str(&format!("pub type {} = {};\n", type_name, rust_type));
                     has_alias = true;
                 }
 
@@ -600,20 +710,23 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                         }
                     });
                     if let Some(null_raw) = null_raw {
-                        let cname = format!("{}_NULL", name.to_uppercase());
+                        let cname = format!("{}_NULL", const_ident(name));
                         if let Some(len) = length {
                             if let Some((_, expr)) =
                                 const_array_expr(primitive, &rust_type, null_raw, *len)
                             {
                                 code.push_str(&format!(
                                     "pub const {}: {} = {};\n",
-                                    cname, name, expr
+                                    cname, type_name, expr
                                 ));
                             }
                         } else if let Some(expr) =
                             const_scalar_expr(primitive, &rust_type, null_raw)
                         {
-                            code.push_str(&format!("pub const {}: {} = {};\n", cname, name, expr));
+                            code.push_str(&format!(
+                                "pub const {}: {} = {};\n",
+                                cname, type_name, expr
+                            ));
                         }
                     }
                 }
@@ -624,6 +737,7 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                 values,
                 description,
             } => {
+                let enum_ty = type_ident(name);
                 let primitive = encoding_primitive(encoding, types);
                 let rust_type = primitive
                     .as_deref()
@@ -640,17 +754,18 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                 code.push_str(
                     "#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy, PartialEq, Eq)]\n",
                 );
-                code.push_str(&format!("pub struct {}(pub {});\n", name, rust_type));
-                code.push_str(&format!("impl {} {{\n", name));
+                code.push_str(&format!("pub struct {}(pub {});\n", enum_ty, rust_type));
+                code.push_str(&format!("impl {} {{\n", enum_ty));
                 code.push_str(PARSE_PREFIX_METHOD);
                 code.push_str("}\n\n");
                 if !values.is_empty() {
-                    let enum_name = format!("{}Enum", name);
+                    let enum_name = enum_name(name);
                     maybe_doc_comment(&mut code, description);
                     code.push_str(&format!("#[repr({})]\n", repr_ty));
                     code.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
                     code.push_str(&format!("pub enum {} {{\n", enum_name));
                     for (vname, val, vdesc) in values {
+                        let variant_name = variant_ident(vname);
                         let literal = if prim_is_char {
                             if val.len() == 1 {
                                 let c = val.chars().next().unwrap();
@@ -662,14 +777,15 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                             val.clone()
                         };
                         maybe_doc_comment(&mut code, vdesc);
-                        code.push_str(&format!("    {} = {},\n", vname, literal));
+                        code.push_str(&format!("    {} = {},\n", variant_name, literal));
                     }
                     code.push_str("}\n");
                 }
                 // define associated constants for variants
                 if !values.is_empty() {
-                    code.push_str(&format!("impl {} {{\n", name));
+                    code.push_str(&format!("impl {} {{\n", enum_ty));
                     for (vname, val, vdesc) in values {
+                        let variant_name = const_ident(vname);
                         // convert char values to numeric if necessary
                         let literal = if prim_is_char {
                             if val.len() == 1 {
@@ -684,18 +800,19 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                         maybe_doc_comment(&mut code, vdesc);
                         code.push_str(&format!(
                             "    pub const {}: Self = Self({});\n",
-                            vname,
+                            variant_name,
                             builder_value_expr(&literal, &rust_type)
                         ));
                     }
                     if let Some(raw_expr) = scalar_expr("self.0", &rust_type) {
-                        let enum_name = format!("{}Enum", name);
+                        let enum_name = enum_name(name);
                         code.push_str(&format!(
                             "    #[inline]\n    pub fn as_enum(self) -> Option<{enum_name}> {{\n        let raw = {raw_expr};\n        match raw {{\n",
                             enum_name = enum_name,
                             raw_expr = raw_expr
                         ));
                         for (vname, val, _) in values {
+                            let variant_name = variant_ident(vname);
                             let literal = if prim_is_char {
                                 if val.len() == 1 {
                                     let c = val.chars().next().unwrap();
@@ -710,14 +827,14 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                                 "            {lit} => Some({enum_name}::{vname}),\n",
                                 lit = literal,
                                 enum_name = enum_name,
-                                vname = vname
+                                vname = variant_name
                             ));
                         }
                         code.push_str("            _ => None,\n        }\n    }\n");
                     }
                     code.push_str("}\n");
-                    let enum_name = format!("{}Enum", name);
-                    code.push_str(&format!("impl From<{}> for {} {{\n", enum_name, name));
+                    let enum_name = enum_name(name);
+                    code.push_str(&format!("impl From<{}> for {} {{\n", enum_name, enum_ty));
                     code.push_str(&format!(
                         "    fn from(v: {}) -> Self {{\n        let raw: {} = v as {};\n        let encoded = {};\n        Self(encoded)\n    }}\n",
                         enum_name,
@@ -735,6 +852,7 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                 choices,
                 description,
             } => {
+                let set_ty = type_ident(name);
                 let primitive = encoding_primitive(encoding, types);
                 let rust_type = primitive
                     .as_deref()
@@ -746,19 +864,20 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                 code.push_str(
                     "#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy, PartialEq, Eq)]\n",
                 );
-                code.push_str(&format!("pub struct {}(pub {});\n", name, rust_type));
-                code.push_str(&format!("impl {} {{\n", name));
+                code.push_str(&format!("pub struct {}(pub {});\n", set_ty, rust_type));
+                code.push_str(&format!("impl {} {{\n", set_ty));
                 code.push_str(PARSE_PREFIX_METHOD);
                 code.push_str("}\n\n");
                 if !choices.is_empty() {
-                    code.push_str(&format!("impl {} {{\n", name));
+                    code.push_str(&format!("impl {} {{\n", set_ty));
                     for (cname, bit, cdesc) in choices {
+                        let choice_name = const_ident(cname);
                         // bit may be decimal or integer string
                         let bit_idx: u32 = bit.parse().unwrap_or(0);
                         maybe_doc_comment(&mut code, cdesc);
                         code.push_str(&format!(
                             "    pub const {}: Self = Self({});\n",
-                            cname,
+                            choice_name,
                             set_bit_value_expr(bit_idx, &rust_type)
                         ));
                     }
@@ -771,6 +890,7 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                 fields,
                 description,
             } => {
+                let composite_ty = type_ident(name);
                 // attach doc comment if present on composite
                 maybe_doc_comment(&mut code, description);
                 // generate a struct representing the composite
@@ -778,7 +898,7 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                 code.push_str(
                     "#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]\n",
                 );
-                code.push_str(&format!("pub struct {} {{\n", name));
+                code.push_str(&format!("pub struct {} {{\n", composite_ty));
                 let mut const_fields = Vec::new();
                 for f in fields {
                     match f {
@@ -807,7 +927,7 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                                     maybe_doc_comment(&mut code, description);
                                     code.push_str(&format!(
                                         "    pub {}: [{}; {}],\n",
-                                        fname.to_snake_case(),
+                                        snake_ident(fname),
                                         rust_type,
                                         len
                                     ));
@@ -815,26 +935,30 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                                     maybe_doc_comment(&mut code, description);
                                     code.push_str(&format!(
                                         "    pub {}: {},\n",
-                                        fname.to_snake_case(),
+                                        snake_ident(fname),
                                         rust_type
                                     ));
                                 }
                             }
                         }
                         CompositeField::Ref { name: fname, ty } => {
-                            code.push_str(&format!("    pub {}: {},\n", fname.to_snake_case(), ty));
+                            code.push_str(&format!(
+                                "    pub {}: {},\n",
+                                snake_ident(fname),
+                                type_ident(ty)
+                            ));
                         }
                     }
                 }
                 code.push_str("}\n\n");
-                code.push_str(&format!("impl {} {{\n", name));
+                code.push_str(&format!("impl {} {{\n", composite_ty));
                 code.push_str(PARSE_PREFIX_METHOD);
                 code.push_str("}\n\n");
                 let mut impl_body = String::new();
                 if !const_fields.is_empty() {
                     for (fname, prim, len, val) in const_fields {
                         if let Some(rust_type) = primitive_to_rust(&prim, opts) {
-                            let cname = fname.to_uppercase();
+                            let cname = const_ident(&fname);
                             if let Some(len) = len
                                 && len > 1
                             {
@@ -860,7 +984,7 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                 composite_null_constants(&mut impl_body, fields, schema, opts);
                 optional_methods_for_composite_fields(&mut impl_body, fields, schema, opts, "self");
                 if !impl_body.is_empty() {
-                    code.push_str(&format!("impl {} {{\n", name));
+                    code.push_str(&format!("impl {} {{\n", composite_ty));
                     code.push_str(&impl_body);
                     code.push_str("}\n\n");
                 }
@@ -901,6 +1025,7 @@ fn generate_message_header(opts: &GeneratorOptions) -> String {
 /// macro definition and the message struct itself.  Fields using
 /// unsupported types are skipped.
 fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> String {
+    let msg_name = type_ident(&msg.name);
     let fields = message_fields(msg);
     let groups = message_groups(msg);
     let data_fields = message_data(msg);
@@ -982,13 +1107,13 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     code.push_str(
         "#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]\n",
     );
-    code.push_str(&format!("pub struct {} {{\n", msg.name));
+    code.push_str(&format!("pub struct {} {{\n", msg_name));
     write_fields_with_offsets(&mut code, &fields, schema, opts);
     code.push_str("}\n\n");
     // associated constants for constant fields
-    push_constant_field_impl(&mut code, &msg.name, &fields, schema, opts);
+    push_constant_field_impl(&mut code, &msg_name, &fields, schema, opts);
     // impl parse_prefix
-    code.push_str(&format!("impl {} {{\n", msg.name));
+    code.push_str(&format!("impl {} {{\n", msg_name));
     code.push_str(PARSE_PREFIX_METHOD);
     code.push_str(&format!(
         "    pub const BLOCK_LENGTH: u16 = {};\n",
@@ -1018,55 +1143,49 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     for f in &fields {
         let sv = f.since_version.unwrap_or(0);
         let sem = f.semantic_type.clone().unwrap_or_default();
+        let field_const = const_ident(&f.name);
         if let Some(off) = f.offset {
             code.push_str(&format!(
                 "    pub const {}_OFFSET: u32 = {};\n",
-                f.name.to_uppercase(),
-                off
+                field_const, off
             ));
         }
         if let Some(ref minv) = f.min_value {
             code.push_str(&format!(
                 "    pub const {}_MIN: &str = \"{}\";\n",
-                f.name.to_uppercase(),
-                minv
+                field_const, minv
             ));
         }
         if let Some(ref maxv) = f.max_value {
             code.push_str(&format!(
                 "    pub const {}_MAX: &str = \"{}\";\n",
-                f.name.to_uppercase(),
-                maxv
+                field_const, maxv
             ));
         }
         if let Some(ref nullv) = f.null_value {
             code.push_str(&format!(
                 "    pub const {}_NULL: &str = \"{}\";\n",
-                f.name.to_uppercase(),
-                nullv
+                field_const, nullv
             ));
         }
         if let Some(ref initv) = f.initial_value {
             code.push_str(&format!(
                 "    pub const {}_INITIAL: &str = \"{}\";\n",
-                f.name.to_uppercase(),
-                initv
+                field_const, initv
             ));
         }
         code.push_str(&format!(
             "    pub const {}_SINCE_VERSION: u32 = {};\n",
-            f.name.to_uppercase(),
-            sv
+            field_const, sv
         ));
         code.push_str(&format!(
             "    pub const {}_SEMANTIC_TYPE: &'static str = \"{}\";\n",
-            f.name.to_uppercase(),
-            sem
+            field_const, sem
         ));
     }
     if !data_fields.is_empty() {
         for d in &data_fields {
-            let fn_name = d.name.to_snake_case();
+            let fn_name = snake_ident(&d.name);
             let kind = length_kind_token(length_kind_for_data(&d.ty, schema, opts));
             code.push_str(&format!(
                 "    #[inline]\n    pub fn parse_{}<'a>(&self, buf: &'a [u8]) -> Option<(VarData<'a>, &'a [u8])> {{\n        parse_var_data(buf, {})\n    }}\n",
@@ -1075,8 +1194,9 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         }
     }
     code.push_str("}\n\n");
-    let builder_name = format!("{}Builder", msg.name);
-    let encoder_name = format!("{}Encoder", msg.name);
+    let builder_name = format!("{}Builder", msg_name);
+    let encoder_name = format!("{}Encoder", msg_name);
+    let body_name = format!("{}Body", msg_name);
     let fixed_required = msg_block_length.max(
         field_layouts
             .iter()
@@ -1091,19 +1211,19 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     code.push_str(&format!("impl {} {{\n", builder_name));
     code.push_str(&format!(
         "    pub const BLOCK_LENGTH: u16 = {}::BLOCK_LENGTH;\n",
-        msg.name
+        msg_name
     ));
     code.push_str(&format!(
         "    pub const TEMPLATE_ID: u16 = {}::TEMPLATE_ID;\n",
-        msg.name
+        msg_name
     ));
     code.push_str(&format!(
         "    pub const SCHEMA_ID: u16 = {}::SCHEMA_ID;\n",
-        msg.name
+        msg_name
     ));
     code.push_str(&format!(
         "    pub const SCHEMA_VERSION: u16 = {}::SCHEMA_VERSION;\n",
-        msg.name
+        msg_name
     ));
     code.push_str(
         "    pub fn new() -> Self {\n        Self { buf: vec![0u8; Self::BLOCK_LENGTH as usize] }\n    }\n",
@@ -1117,7 +1237,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
             continue;
         }
         let offset = layout.offset;
-        let field_name = field.name.to_snake_case();
+        let field_name = snake_ident(&field.name);
         if let Some(resolved_type) =
             resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
         {
@@ -1159,8 +1279,8 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         }
     }
     for g in &groups {
-        let builder_ty = format!("{}GroupBuilder", g.name);
-        let gname = g.name.to_snake_case();
+        let builder_ty = type_with_suffix(&g.name, "GroupBuilder");
+        let gname = snake_ident(&g.name);
         code.push_str(&format!(
             "    pub fn {name}<F>(&mut self, f: F) -> Result<&mut Self, EncodeError>\n    where\n        F: FnOnce(&mut {builder_ty}),\n    {{\n        let mut builder = {builder_ty}::new(&mut self.buf);\n        f(&mut builder);\n        builder.finish()?;\n        Ok(self)\n    }}\n",
             name = gname,
@@ -1168,7 +1288,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         ));
     }
     for d in &data_fields {
-        let name = d.name.to_snake_case();
+        let name = snake_ident(&d.name);
         let kind = length_kind_token(length_kind_for_data(&d.ty, schema, opts));
         code.push_str(&format!(
             "    pub fn {name}(&mut self, bytes: &[u8]) -> Result<&mut Self, EncodeError> {{\n        write_var_data(&mut self.buf, bytes, {kind}, ENDIAN)?;\n        Ok(self)\n    }}\n",
@@ -1189,7 +1309,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
     code.push_str(&format!("impl<'a> {}<'a> {{\n", encoder_name));
     code.push_str(&format!(
         "    pub const BLOCK_LENGTH: u16 = {}::BLOCK_LENGTH;\n",
-        msg.name
+        msg_name
     ));
     code.push_str(&format!(
         "    pub const FIXED_LEN: usize = {};\n",
@@ -1206,7 +1326,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
             continue;
         }
         let offset = layout.offset;
-        let field_name = field.name.to_snake_case();
+        let field_name = snake_ident(&field.name);
         if let Some(resolved_type) =
             resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
         {
@@ -1248,7 +1368,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
         }
     }
     for d in &data_fields {
-        let name = d.name.to_snake_case();
+        let name = snake_ident(&d.name);
         let kind = length_kind_token(length_kind_for_data(&d.ty, schema, opts));
         code.push_str(&format!(
             "    pub fn {name}(&mut self, bytes: &[u8]) -> Result<&mut Self, EncodeIntoError> {{\n        let written = write_var_data_into(self.buf, self.used, bytes, {kind}, ENDIAN)?;\n        self.used = self.used.checked_add(written).ok_or(EncodeIntoError::InvalidState(\"encoded length overflow\"))?;\n        Ok(self)\n    }}\n",
@@ -1257,8 +1377,8 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
         ));
     }
     for g in &groups {
-        let encoder_ty = format!("{}GroupEncoder", g.name);
-        let gname = g.name.to_snake_case();
+        let encoder_ty = type_with_suffix(&g.name, "GroupEncoder");
+        let gname = snake_ident(&g.name);
         code.push_str(&format!(
             "    pub fn {name}<F>(&mut self, f: F) -> Result<&mut Self, EncodeIntoError>\n    where\n        F: FnOnce(&mut {encoder}<'_>) -> Result<(), EncodeIntoError>,\n    {{\n        let mut encoder = {encoder}::new(self.buf, self.used)?;\n        f(&mut encoder)?;\n        self.used = encoder.finish()?;\n        Ok(self)\n    }}\n",
             name = gname,
@@ -1267,7 +1387,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
     }
     code.push_str("    pub fn finish(self) -> usize {\n        self.used\n    }\n");
     code.push_str("}\n\n");
-    code.push_str(&format!("impl {} {{\n", msg.name));
+    code.push_str(&format!("impl {} {{\n", msg_name));
     code.push_str(&format!(
         "    /// Encode message body (fixed block + variable data) into `dst` without allocation.\n    ///\n    /// Returns number of body bytes written.\n    pub fn encode_body_into<F>(dst: &mut [u8], f: F) -> Result<usize, EncodeIntoError>\n    where\n        F: FnOnce(&mut {encoder}<'_>) -> Result<(), EncodeIntoError>,\n    {{\n        let mut encoder = {encoder}::new(dst)?;\n        f(&mut encoder)?;\n        Ok(encoder.finish())\n    }}\n",
         encoder = encoder_name
@@ -1283,28 +1403,32 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
     }
     // acting version aware view
     code.push_str(&format!(
-        "#[derive(Debug, Clone, Copy)]\npub struct {}Body<'a> {{\n    parsed: Option<&'a {}>,\n    raw: &'a [u8],\n}}\n\n",
-        msg.name, msg.name
+        "#[derive(Debug, Clone, Copy)]\npub struct {}<'a> {{\n    parsed: Option<&'a {}>,\n    raw: &'a [u8],\n}}\n\n",
+        body_name, msg_name
     ));
     code.push_str(&format!(
-        "impl<'a> core::ops::Deref for {}Body<'a> {{\n    type Target = {};\n    fn deref(&self) -> &Self::Target {{\n        self.parsed.expect(\"message body shorter than current layout; use accessor methods\")\n    }}\n}}\n\n",
-        msg.name, msg.name
+        "impl<'a> core::ops::Deref for {}<'a> {{\n    type Target = {};\n    fn deref(&self) -> &Self::Target {{\n        self.parsed.expect(\"message body shorter than current layout; use accessor methods\")\n    }}\n}}\n\n",
+        body_name, msg_name
     ));
     code.push_str(&format!(
-        "impl<'a> {}Body<'a> {{\n    fn parsed(&self) -> Option<&'a {}> {{\n        self.parsed\n    }}\n    fn bytes(&self) -> &[u8] {{\n        self.raw\n    }}\n}}\n\n",
-        msg.name, msg.name
+        "impl<'a> {}<'a> {{\n    fn parsed(&self) -> Option<&'a {}> {{\n        self.parsed\n    }}\n    fn bytes(&self) -> &[u8] {{\n        self.raw\n    }}\n}}\n\n",
+        body_name, msg_name
     ));
     code.push_str(&format!(
-        "#[derive(Debug, Clone)]\npub struct {}View<'a> {{\n    pub body: {}Body<'a>,\n    pub acting_block_length: usize,\n    pub acting_version: u16,\n}}\n\n",
-        msg.name, msg.name
+        "#[derive(Debug, Clone)]\npub struct {}<'a> {{\n    pub body: {}<'a>,\n    pub acting_block_length: usize,\n    pub acting_version: u16,\n}}\n\n",
+        type_with_suffix(&msg.name, "View"),
+        body_name
     ));
-    code.push_str(&format!("impl<'a> {}View<'a> {{\n", msg.name));
+    code.push_str(&format!(
+        "impl<'a> {}<'a> {{\n",
+        type_with_suffix(&msg.name, "View")
+    ));
     code.push_str(&format!(
         "    #[inline]\n    pub fn is_fixed_layout(&self) -> bool {{\n        self.acting_version >= {name}::SCHEMA_VERSION\n            && self.acting_block_length >= core::mem::size_of::<{name}>()\n    }}\n",
-        name = msg.name
+        name = msg_name
     ));
     for field in &fields {
-        let fname = field.name.to_snake_case();
+        let fname = snake_ident(&field.name);
         let since = field.since_version.unwrap_or(0);
         if field_is_constant(field, schema) {
             code.push_str(&format!(
@@ -1317,8 +1441,8 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
                     "    #[inline]\n    pub fn {fname}(&self) -> Option<{ty}> {{\n        if !self.has_{fname}() {{ return None; }}\n        Some({msg_name}::{const_name})\n    }}\n",
                     fname = fname,
                     ty = ty,
-                    msg_name = msg.name,
-                    const_name = fname.to_uppercase()
+                    msg_name = msg_name,
+                    const_name = const_ident(&field.name)
                 ));
             }
             continue;
@@ -1350,7 +1474,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
     }
     if !data_fields.is_empty() {
         for d in &data_fields {
-            let fn_name = d.name.to_snake_case();
+            let fn_name = snake_ident(&d.name);
             let kind = length_kind_token(length_kind_for_data(&d.ty, schema, opts));
             code.push_str(&format!(
                 "    #[inline]\n    pub fn parse_{name}<'b>(&self, buf: &'b [u8]) -> Option<(VarData<'b>, &'b [u8])> {{\n        parse_var_data(buf, {kind})\n    }}\n",
@@ -1362,7 +1486,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
     code.push_str("}\n\n");
     code.push_str(&format!(
         "pub fn parse_with_header<'a>(body: &'a [u8], header: &MessageHeader) -> Option<({name}View<'a>, &'a [u8])> {{\n    let mut acting_block_length = header.block_length.get() as usize;\n    if acting_block_length == 0 {{ acting_block_length = {name}::BLOCK_LENGTH as usize; }}\n    let acting_version = header.version.get();\n    if body.len() < acting_block_length {{ return None; }}\n    let needed = core::mem::size_of::<{name}>();\n    let (prefix, rest) = body.split_at(acting_block_length);\n    let (parsed, raw) = if acting_block_length >= needed {{\n        let raw = &prefix[..needed];\n        let (msg, _) = Ref::<_, {name}>::from_prefix(raw).ok()?;\n        (Some(Ref::into_ref(msg)), raw)\n    }} else {{\n        (None, prefix)\n    }};\n    let view = {name}View {{ body: {name}Body {{ parsed, raw }}, acting_block_length, acting_version }};\n    Some((view, rest))\n}}\n",
-        name = msg.name
+        name = msg_name
     ));
     code
 }
@@ -1533,12 +1657,12 @@ fn resolve_type(
                 {
                     Some(rust)
                 } else {
-                    Some(tname.clone())
+                    Some(type_ident(tname))
                 }
             }
-            TypeDef::Enum { name: tname, .. } => Some(tname.clone()),
-            TypeDef::Set { name: tname, .. } => Some(tname.clone()),
-            TypeDef::Composite { name: tname, .. } => Some(tname.clone()),
+            TypeDef::Enum { name: tname, .. } => Some(type_ident(tname)),
+            TypeDef::Set { name: tname, .. } => Some(type_ident(tname)),
+            TypeDef::Composite { name: tname, .. } => Some(type_ident(tname)),
         }
     } else {
         None
@@ -1672,7 +1796,7 @@ fn write_fields_with_offsets(
             continue;
         }
         let ty_name = &field.ty;
-        let field_name = field.name.to_snake_case();
+        let field_name = snake_ident(&field.name);
         if let Some(rust_type) = resolve_type(ty_name, schema, opts, field.byte_order.as_deref()) {
             let field_sz = field_size_bytes(field, schema, opts);
             if let (Some(target), Some(cur)) = (field.offset.map(|o| o as usize), cur_offset)
@@ -1786,12 +1910,12 @@ fn length_kind_token(kind: LengthKind) -> &'static str {
 }
 
 fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut String) {
-    let group_name = &g.name;
-    let group_snake = g.name.to_snake_case();
+    let group_name = type_ident(&g.name);
+    let group_snake = snake_ident(&g.name);
     let entry_struct = format!("{}Entry", group_name);
     let entry_body = format!("{}Body", entry_struct);
     let entry_view = format!("{}EntryView", group_name);
-    let parse_entry_body_fn = format!("parse_{}_entry_body", group_snake);
+    let parse_entry_body_fn = format!("parse_{}", snake_with_suffix(&group_snake, "entry_body"));
     let group_struct = format!("{}Group", group_name);
     let g_block_length = group_block_length(g, schema, opts);
     let iter_name = format!("{}Iter", group_name);
@@ -1814,6 +1938,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     let has_nested = !g_nested.is_empty();
     let has_any_var = has_data || has_nested;
     let dim = dimension_fields(schema, &g.dimension_type, opts);
+    let dim_ty = type_ident(&g.dimension_type);
     let count_max = count_max_expr(&dim.count_field_ty);
     let block_len_expr = if let Some(bl) = g.block_length {
         bl.to_string()
@@ -1832,7 +1957,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     ));
     code.push_str(&format!(
         "    let (header, payload) = {}::parse_prefix(buf)?;\n",
-        g.dimension_type
+        dim_ty
     ));
     code.push_str(&format!(
         "    let header_block_len = {};\n",
@@ -1853,7 +1978,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
 
     code.push_str(&format!(
         "#[derive(Debug, Clone, Copy)]\npub struct {}<'a> {{\n    pub header: &'a {},\n    payload: &'a [u8],\n    block_length: usize,\n}}\n\n",
-        group_struct, g.dimension_type
+        group_struct, dim_ty
     ));
     code.push_str(&format!("impl<'a> {}<'a> {{\n", group_struct));
     let g_since = g.since_version.unwrap_or(0);
@@ -1931,15 +2056,12 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     for nested in &g_nested {
         code.push_str(&format!(
             "    pub {}: {}Group<'a>,\n",
-            nested.name.to_snake_case(),
-            nested.name
+            snake_ident(&nested.name),
+            type_ident(&nested.name)
         ));
     }
     for d in &g_data {
-        code.push_str(&format!(
-            "    pub {}: VarData<'a>,\n",
-            d.name.to_snake_case()
-        ));
+        code.push_str(&format!("    pub {}: VarData<'a>,\n", snake_ident(&d.name)));
     }
     code.push_str("}\n\n");
 
@@ -1967,7 +2089,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     if !g_fields.is_empty() {
         code.push_str(&format!("impl<'a> {}<'a> {{\n", entry_view));
         for field in &g_fields {
-            let fname = field.name.to_snake_case();
+            let fname = snake_ident(&field.name);
             if field_is_constant(field, schema) {
                 code.push_str(&format!(
                     "    #[inline]\n    pub fn has_{fname}(&self) -> bool {{\n        true\n    }}\n",
@@ -1979,7 +2101,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
                         fname = fname,
                         ty = ty,
                         entry_struct = entry_struct,
-                        const_name = fname.to_uppercase()
+                        const_name = const_ident(&field.name)
                     ));
                 }
                 continue;
@@ -2015,24 +2137,22 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         code.push_str(&format!("impl {} {{\n", entry_struct));
         optional_methods_for_fields(code, &g_fields, schema, opts, "self");
         for f in &g_fields {
+            let field_const = const_ident(&f.name);
             if let Some(off) = f.offset {
                 code.push_str(&format!(
                     "    pub const {}_OFFSET: u32 = {};\n",
-                    f.name.to_uppercase(),
-                    off
+                    field_const, off
                 ));
             }
             let sv = f.since_version.unwrap_or(0);
             let sem = f.semantic_type.clone().unwrap_or_default();
             code.push_str(&format!(
                 "    pub const {}_SINCE_VERSION: u32 = {};\n",
-                f.name.to_uppercase(),
-                sv
+                field_const, sv
             ));
             code.push_str(&format!(
                 "    pub const {}_SEMANTIC_TYPE: &'static str = \"{}\";\n",
-                f.name.to_uppercase(),
-                sem
+                field_const, sem
             ));
         }
         code.push_str("}\n\n");
@@ -2085,6 +2205,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
             continue;
         }
         let offset = layout.offset;
+        let field_name = snake_ident(&field.name);
         if let Some(resolved_type) =
             resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
         {
@@ -2098,7 +2219,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
                     host_type_for_field(field, schema),
                     raw_expr_for_value(field, "value", schema, opts),
                 ) {
-                    code.push_str(&format!("    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let raw: {host} = {raw};\n", name = field.name.to_snake_case(), param = param_ty, host = host_ty, raw = raw_expr));
+                    code.push_str(&format!("    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let raw: {host} = {raw};\n", name = field_name, param = param_ty, host = host_ty, raw = raw_expr));
                     push_validation_asserts(code, field, schema, &host_ty);
                     code.push_str(&format!(
                         "        let encoded = {expr};\n        write_bytes_at(self.buf, self.start + {offset}usize, &encoded);\n        self\n    }}\n",
@@ -2108,7 +2229,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
                 } else {
                     code.push_str(&format!(
                         "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_at(self.buf, self.start + {offset}usize, &encoded);\n        self\n    }}\n",
-                        name = field.name.to_snake_case(),
+                        name = field_name,
                         param = param_ty,
                         expr = encoded_expr,
                         offset = offset
@@ -2117,7 +2238,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
             } else {
                 code.push_str(&format!(
                     "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_at(self.buf, self.start + {offset}usize, &encoded);\n        self\n    }}\n",
-                    name = field.name.to_snake_case(),
+                    name = field_name,
                     param = param_ty,
                     expr = encoded_expr,
                     offset = offset
@@ -2126,8 +2247,8 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         }
     }
     for nested in &g_nested {
-        let nested_builder = format!("{}GroupBuilder", nested.name);
-        let name = nested.name.to_snake_case();
+        let nested_builder = type_with_suffix(&nested.name, "GroupBuilder");
+        let name = snake_ident(&nested.name);
         code.push_str(&format!(
             "    pub fn {name}<F>(&mut self, f: F) -> Result<&mut Self, EncodeError>\n    where\n        F: FnOnce(&mut {builder}),\n    {{\n        let mut builder = {builder}::new(self.buf);\n        f(&mut builder);\n        builder.finish()?;\n        Ok(self)\n    }}\n",
             name = name,
@@ -2135,7 +2256,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         ));
     }
     for d in &g_data {
-        let name = d.name.to_snake_case();
+        let name = snake_ident(&d.name);
         let kind = length_kind_token(length_kind_for_data(&d.ty, schema, opts));
         code.push_str(&format!(
             "    pub fn {name}(&mut self, bytes: &[u8]) -> Result<&mut Self, EncodeError> {{\n        write_var_data(self.buf, bytes, {kind}, ENDIAN)?;\n        Ok(self)\n    }}\n",
@@ -2197,6 +2318,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
             continue;
         }
         let offset = layout.offset;
+        let field_name = snake_ident(&field.name);
         if let Some(resolved_type) =
             resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
         {
@@ -2210,7 +2332,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
                     host_type_for_field(field, schema),
                     raw_expr_for_value(field, "value", schema, opts),
                 ) {
-                    code.push_str(&format!("    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let raw: {host} = {raw};\n", name = field.name.to_snake_case(), param = param_ty, host = host_ty, raw = raw_expr));
+                    code.push_str(&format!("    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let raw: {host} = {raw};\n", name = field_name, param = param_ty, host = host_ty, raw = raw_expr));
                     push_validation_asserts(code, field, schema, &host_ty);
                     code.push_str(&format!(
                         "        let encoded = {expr};\n        write_bytes_into_in_bounds(self.buf, self.start + {offset}usize, &encoded);\n        self\n    }}\n",
@@ -2220,7 +2342,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
                 } else {
                     code.push_str(&format!(
                         "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_into_in_bounds(self.buf, self.start + {offset}usize, &encoded);\n        self\n    }}\n",
-                        name = field.name.to_snake_case(),
+                        name = field_name,
                         param = param_ty,
                         expr = encoded_expr,
                         offset = offset
@@ -2229,7 +2351,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
             } else {
                 code.push_str(&format!(
                     "    pub fn {name}(&mut self, value: {param}) -> &mut Self {{\n        let encoded = {expr};\n        write_bytes_into_in_bounds(self.buf, self.start + {offset}usize, &encoded);\n        self\n    }}\n",
-                    name = field.name.to_snake_case(),
+                    name = field_name,
                     param = param_ty,
                     expr = encoded_expr,
                     offset = offset
@@ -2238,8 +2360,8 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         }
     }
     for nested in &g_nested {
-        let nested_encoder = format!("{}GroupEncoder", nested.name);
-        let name = nested.name.to_snake_case();
+        let nested_encoder = type_with_suffix(&nested.name, "GroupEncoder");
+        let name = snake_ident(&nested.name);
         code.push_str(&format!(
             "    pub fn {name}<F>(&mut self, f: F) -> Result<&mut Self, EncodeIntoError>\n    where\n        F: FnOnce(&mut {encoder}<'_>) -> Result<(), EncodeIntoError>,\n    {{\n        let mut encoder = {encoder}::new(self.buf, self.cursor)?;\n        f(&mut encoder)?;\n        self.cursor = encoder.finish()?;\n        Ok(self)\n    }}\n",
             name = name,
@@ -2247,7 +2369,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         ));
     }
     for d in &g_data {
-        let name = d.name.to_snake_case();
+        let name = snake_ident(&d.name);
         let kind = length_kind_token(length_kind_for_data(&d.ty, schema, opts));
         code.push_str(&format!(
             "    pub fn {name}(&mut self, bytes: &[u8]) -> Result<&mut Self, EncodeIntoError> {{\n        let written = write_var_data_into(self.buf, self.cursor, bytes, {kind}, ENDIAN)?;\n        self.cursor = self.cursor.checked_add(written).ok_or(EncodeIntoError::InvalidState(\"group var data length overflow\"))?;\n        Ok(self)\n    }}\n",
@@ -2267,15 +2389,16 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         for member in &g.members {
             match member {
                 GroupMember::Group(nested) => {
+                    let nested_name = snake_ident(&nested.name);
                     code.push_str(&format!(
                         "        let nested_{name} = parse_{snake}(tail)?;\n",
-                        name = nested.name.to_snake_case(),
-                        snake = nested.name.to_snake_case()
+                        name = nested_name,
+                        snake = nested_name
                     ));
                     code.push_str(&format!(
                         "        let after_{name} = skip_{snake}(nested_{name}.payload, nested_{name}.count(), nested_{name}.block_length)?;\n        tail = after_{name};\n",
-                        name = nested.name.to_snake_case(),
-                        snake = nested.name.to_snake_case()
+                        name = nested_name,
+                        snake = nested_name
                     ));
                 }
                 GroupMember::Data(_) => {
@@ -2299,14 +2422,11 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         for member in &g.members {
             match member {
                 GroupMember::Group(nested) => {
-                    code.push_str(&format!(
-                        ", {}: nested_{}",
-                        nested.name.to_snake_case(),
-                        nested.name.to_snake_case()
-                    ));
+                    let nested_name = snake_ident(&nested.name);
+                    code.push_str(&format!(", {}: nested_{}", nested_name, nested_name));
                 }
                 GroupMember::Data(d) => {
-                    code.push_str(&format!(", {}: data_{}", d.name.to_snake_case(), data_idx));
+                    code.push_str(&format!(", {}: data_{}", snake_ident(&d.name), data_idx));
                     data_idx += 1;
                 }
                 GroupMember::Field(_) => {}
@@ -2354,10 +2474,10 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     {
         match member {
             GroupMember::Group(nested) => {
+                let nested_name = snake_ident(&nested.name);
                 code.push_str(&format!(
                     "        let nested = parse_{}(tail)?;\n        tail = skip_{}(nested.payload, nested.count(), nested.block_length)?;\n",
-                    nested.name.to_snake_case(),
-                    nested.name.to_snake_case()
+                    nested_name, nested_name
                 ));
             }
             GroupMember::Data(d) => {
@@ -2422,12 +2542,12 @@ fn dimension_fields(schema: &Schema, dim_type: &str, opts: &GeneratorOptions) ->
                         continue;
                     }
                     if let Some(rust) = primitive_to_rust(primitive, opts) {
-                        dim_fields.push((name.to_snake_case(), rust));
+                        dim_fields.push((snake_ident(name), rust));
                     }
                 }
                 CompositeField::Ref { name, ty } => {
                     if let Some(rust) = dimension_field_rust_type(ty, schema, opts) {
-                        dim_fields.push((name.to_snake_case(), rust));
+                        dim_fields.push((snake_ident(name), rust));
                     }
                 }
             }
@@ -2636,12 +2756,14 @@ fn constant_field_value_expr(
     if let Some(value_ref) = &field.value_ref
         && let Some((type_name, variant)) = value_ref.split_once('.')
     {
-        return Some((type_name.to_string(), format!("{type_name}::{variant}")));
+        let type_name = type_ident(type_name);
+        let variant = variant_ident(variant);
+        return Some((type_name.clone(), format!("{type_name}::{variant}")));
     }
 
     if let Some(val) = field.constant.as_deref() {
         let const_ty = resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
-            .unwrap_or_else(|| field.ty.clone());
+            .unwrap_or_else(|| type_ident(&field.ty));
         if let Some(td) = schema.types.get(&field.ty) {
             match td {
                 TypeDef::Primitive {
@@ -2658,7 +2780,8 @@ fn constant_field_value_expr(
                 TypeDef::Enum { encoding, .. } | TypeDef::Set { encoding, .. } => {
                     let rust_type = primitive_to_rust(encoding, opts)?;
                     let raw_expr = const_scalar_expr(encoding, &rust_type, val)?;
-                    return Some((field.ty.clone(), format!("{}({})", field.ty, raw_expr)));
+                    let field_ty = type_ident(&field.ty);
+                    return Some((field_ty.clone(), format!("{field_ty}({raw_expr})")));
                 }
                 TypeDef::Composite { .. } => {}
             }
@@ -2676,9 +2799,10 @@ fn constant_field_value_expr(
     }) = schema.types.get(&field.ty)
     {
         let rust_type = primitive_to_rust(primitive, opts)?;
+        let field_ty = type_ident(&field.ty);
         if let Some(len) = length {
             let (_, expr) = const_array_expr(primitive, &rust_type, val, *len)?;
-            return Some((field.ty.clone(), expr));
+            return Some((field_ty, expr));
         }
 
         let raw_expr = const_scalar_expr(primitive, &rust_type, val)?;
@@ -2692,11 +2816,11 @@ fn constant_field_value_expr(
             schema.types.get(&alias_target),
             Some(TypeDef::Enum { .. } | TypeDef::Set { .. })
         ) {
-            format!("{alias_target}({raw_expr})")
+            format!("{}({raw_expr})", type_ident(&alias_target))
         } else {
             raw_expr
         };
-        return Some((field.ty.clone(), expr));
+        return Some((field_ty, expr));
     }
 
     None
@@ -2719,8 +2843,8 @@ fn push_constant_field_impl(
     }
     code.push_str(&format!("impl {} {{\n", struct_name));
     for f in const_fields {
-        let field_name = f.name.to_snake_case();
-        let const_name = field_name.to_uppercase();
+        let field_name = snake_ident(&f.name);
+        let const_name = const_ident(&f.name);
         if let Some((ty, expr)) = constant_field_value_expr(f, schema, opts) {
             code.push_str(&format!(
                 "    pub const {const_name}: {ty} = {expr};\n",
@@ -2907,6 +3031,7 @@ fn view_field_value_info(
     opts: &GeneratorOptions,
 ) -> Option<ViewFieldValueInfo> {
     let resolved = resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())?;
+    let field_ty = type_ident(&field.ty);
     if resolved.trim().starts_with('[') {
         return Some(ViewFieldValueInfo {
             value_ty: resolved,
@@ -2930,17 +3055,17 @@ fn view_field_value_info(
             && let Some(cond) = null_cond_for_primitive(&prim, host_ty, explicit_null, use_default)
         {
             return Some(ViewFieldValueInfo {
-                value_ty: format!("Option<{}>", field.ty),
+                value_ty: format!("Option<{}>", field_ty),
                 value_expr: format!(
                     "{{ let raw = {raw}; if {cond} {{ None }} else {{ Some(*value) }} }}",
                     raw = raw_expr,
                     cond = cond
                 ),
-                nullable_inner_ty: Some(field.ty.clone()),
+                nullable_inner_ty: Some(field_ty),
             });
         }
         return Some(ViewFieldValueInfo {
-            value_ty: field.ty.clone(),
+            value_ty: field_ty,
             value_expr: "*value".to_string(),
             nullable_inner_ty: None,
         });
@@ -3027,7 +3152,10 @@ fn composite_optional_view_helpers(
                 else {
                     continue;
                 };
-                out.push((format!("{}_opt", name.to_snake_case()), host_ty.to_string()));
+                out.push((
+                    snake_with_suffix(&snake_ident(name), "opt"),
+                    host_ty.to_string(),
+                ));
             }
             CompositeField::Ref { name, ty } => {
                 if !type_is_optional(ty, schema) {
@@ -3049,7 +3177,10 @@ fn composite_optional_view_helpers(
                 else {
                     continue;
                 };
-                out.push((format!("{}_opt", name.to_snake_case()), host_ty.to_string()));
+                out.push((
+                    snake_with_suffix(&snake_ident(name), "opt"),
+                    host_ty.to_string(),
+                ));
             }
         }
     }
@@ -3062,13 +3193,20 @@ fn emit_view_field_helpers(
     schema: &Schema,
     opts: &GeneratorOptions,
 ) {
-    let fname = field.name.to_snake_case();
+    let fname = snake_ident(&field.name);
     let Some(value_info) = view_field_value_info(field, schema, opts) else {
         return;
     };
+    let value_name = snake_with_suffix(&fname, "value");
+    let required_name = snake_with_suffix(&fname, "required");
+    let enum_method_name = snake_with_suffix(&fname, "enum");
+    let bytes_name = snake_with_suffix(&fname, "bytes");
+    let str_name = snake_with_suffix(&fname, "str");
+    let str_trimmed_name = snake_with_suffix(&fname, "str_trimmed");
 
     code.push_str(&format!(
-        "    #[inline]\n    pub fn {fname}_value(&self) -> Option<{ty}> {{\n        let value = self.{fname}()?;\n        Some({expr})\n    }}\n",
+        "    #[inline]\n    pub fn {value_name}(&self) -> Option<{ty}> {{\n        let value = self.{fname}()?;\n        Some({expr})\n    }}\n",
+        value_name = value_name,
         fname = fname,
         ty = value_info.value_ty,
         expr = value_info.value_expr,
@@ -3077,13 +3215,17 @@ fn emit_view_field_helpers(
     if field_is_required(field, schema) {
         if let Some(inner_ty) = value_info.nullable_inner_ty.as_deref() {
             code.push_str(&format!(
-                "    #[inline]\n    pub fn {fname}_required(&self) -> Result<{inner_ty}, DecodeFieldError> {{\n        let value = self.{fname}_value().ok_or(DecodeFieldError::MissingField(\"{fname}\"))?;\n        value.ok_or(DecodeFieldError::NullValue(\"{fname}\"))\n    }}\n",
+                "    #[inline]\n    pub fn {required_name}(&self) -> Result<{inner_ty}, DecodeFieldError> {{\n        let value = self.{value_name}().ok_or(DecodeFieldError::MissingField(\"{fname}\"))?;\n        value.ok_or(DecodeFieldError::NullValue(\"{fname}\"))\n    }}\n",
+                required_name = required_name,
+                value_name = value_name,
                 fname = fname,
                 inner_ty = inner_ty
             ));
         } else {
             code.push_str(&format!(
-                "    #[inline]\n    pub fn {fname}_required(&self) -> Result<{ty}, DecodeFieldError> {{\n        self.{fname}_value().ok_or(DecodeFieldError::MissingField(\"{fname}\"))\n    }}\n",
+                "    #[inline]\n    pub fn {required_name}(&self) -> Result<{ty}, DecodeFieldError> {{\n        self.{value_name}().ok_or(DecodeFieldError::MissingField(\"{fname}\"))\n    }}\n",
+                required_name = required_name,
+                value_name = value_name,
                 fname = fname,
                 ty = value_info.value_ty
             ));
@@ -3093,25 +3235,30 @@ fn emit_view_field_helpers(
     if let Some(TypeDef::Enum { values, .. }) = schema.types.get(&field.ty)
         && !values.is_empty()
     {
-        let enum_name = format!("{}Enum", field.ty);
-        if value_info.nullable_inner_ty.as_deref() == Some(field.ty.as_str()) {
+        let field_ty = type_ident(&field.ty);
+        let enum_name = enum_name(&field.ty);
+        if value_info.nullable_inner_ty.as_deref() == Some(field_ty.as_str()) {
             code.push_str(&format!(
-                "    #[inline]\n    pub fn {fname}_enum(&self) -> Option<{enum_name}> {{\n        let value = self.{fname}_value()?;\n        value.and_then(|raw| raw.as_enum())\n    }}\n",
-                fname = fname,
+                "    #[inline]\n    pub fn {enum_method_name}(&self) -> Option<{enum_name}> {{\n        let value = self.{value_name}()?;\n        value.and_then(|raw| raw.as_enum())\n    }}\n",
+                enum_method_name = enum_method_name,
+                value_name = value_name,
                 enum_name = enum_name
             ));
         } else {
             code.push_str(&format!(
-                "    #[inline]\n    pub fn {fname}_enum(&self) -> Option<{enum_name}> {{\n        self.{fname}_value().and_then(|raw| raw.as_enum())\n    }}\n",
-                fname = fname,
+                "    #[inline]\n    pub fn {enum_method_name}(&self) -> Option<{enum_name}> {{\n        self.{value_name}().and_then(|raw| raw.as_enum())\n    }}\n",
+                enum_method_name = enum_method_name,
+                value_name = value_name,
                 enum_name = enum_name
             ));
         }
     }
 
     for (sub_method, ret_ty) in composite_optional_view_helpers(&field.ty, schema, opts) {
+        let method_name = snake_with_suffix(&fname, &sub_method);
         code.push_str(&format!(
-            "    #[inline]\n    pub fn {fname}_{sub_method}(&self) -> Option<{ret_ty}> {{\n        self.{fname}().and_then(|value| value.{sub_method}())\n    }}\n",
+            "    #[inline]\n    pub fn {method_name}(&self) -> Option<{ret_ty}> {{\n        self.{fname}().and_then(|value| value.{sub_method}())\n    }}\n",
+            method_name = method_name,
             fname = fname,
             sub_method = sub_method,
             ret_ty = ret_ty
@@ -3122,17 +3269,20 @@ fn emit_view_field_helpers(
         && let Some(len) = parse_u8_array_len(&resolved)
     {
         code.push_str(&format!(
-            "    #[inline(always)]\n    pub fn {fname}_bytes(&self) -> Option<&[u8; {len}]> {{\n        self.{fname}()\n    }}\n",
+            "    #[inline(always)]\n    pub fn {bytes_name}(&self) -> Option<&[u8; {len}]> {{\n        self.{fname}()\n    }}\n",
+            bytes_name = bytes_name,
             fname = fname,
             len = len
         ));
         code.push_str(&format!(
-            "    #[inline]\n    pub fn {fname}_str(&self) -> Option<&str> {{\n        let bytes = self.{fname}_bytes()?;\n        str::from_utf8(bytes).ok()\n    }}\n",
-            fname = fname
+            "    #[inline]\n    pub fn {str_name}(&self) -> Option<&str> {{\n        let bytes = self.{bytes_name}()?;\n        str::from_utf8(bytes).ok()\n    }}\n",
+            str_name = str_name,
+            bytes_name = bytes_name
         ));
         code.push_str(&format!(
-            "    #[inline]\n    pub fn {fname}_str_trimmed(&self) -> Option<&str> {{\n        let bytes = self.{fname}_bytes()?;\n        let trimmed = trim_ascii_space_and_nul_right(bytes);\n        str::from_utf8(trimmed).ok()\n    }}\n",
-            fname = fname
+            "    #[inline]\n    pub fn {str_trimmed_name}(&self) -> Option<&str> {{\n        let bytes = self.{bytes_name}()?;\n        let trimmed = trim_ascii_space_and_nul_right(bytes);\n        str::from_utf8(trimmed).ok()\n    }}\n",
+            str_trimmed_name = str_trimmed_name,
+            bytes_name = bytes_name
         ));
     }
 }
@@ -3148,8 +3298,8 @@ fn optional_methods_for_fields(
         if !field_is_optional(field, schema) {
             continue;
         }
-        let field_name = field.name.to_snake_case();
-        let method_name = format!("{}_opt", field_name);
+        let field_name = snake_ident(&field.name);
+        let method_name = snake_with_suffix(&field_name, "opt");
 
         if let Some(len) = type_length(&field.ty, schema)
             && len > 1
@@ -3186,7 +3336,7 @@ fn optional_methods_for_fields(
                 code.push_str(&format!(
                     "    #[inline]\n    pub fn {method}(&self) -> Option<{ty}> {{\n        let v = {self_expr}.{field};\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(v) }}\n    }}\n",
                     method = method_name,
-                    ty = field.ty,
+                    ty = type_ident(&field.ty),
                     self_expr = self_expr,
                     field = field_name,
                     val = val_expr,
@@ -3270,7 +3420,7 @@ fn optional_methods_for_composite_fields(
                     None => continue,
                 };
                 let val_expr = match scalar_expr(
-                    &format!("{}.{}", self_expr, name.to_snake_case()),
+                    &format!("{}.{}", self_expr, snake_ident(name)),
                     &rust_type,
                 ) {
                     Some(v) => v,
@@ -3289,7 +3439,7 @@ fn optional_methods_for_composite_fields(
                     Some(c) => c,
                     None => continue,
                 };
-                let method_name = format!("{}_opt", name.to_snake_case());
+                let method_name = snake_with_suffix(&snake_ident(name), "opt");
                 code.push_str(&format!(
                     "    #[inline]\n    pub fn {method}(&self) -> Option<{ty}> {{\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(raw) }}\n    }}\n",
                     method = method_name,
@@ -3316,7 +3466,7 @@ fn optional_methods_for_composite_fields(
                     None => continue,
                 };
                 let val_expr = match scalar_expr(
-                    &format!("{}.{}", self_expr, name.to_snake_case()),
+                    &format!("{}.{}", self_expr, snake_ident(name)),
                     &rust_type,
                 ) {
                     Some(v) => v,
@@ -3335,7 +3485,7 @@ fn optional_methods_for_composite_fields(
                     Some(c) => c,
                     None => continue,
                 };
-                let method_name = format!("{}_opt", name.to_snake_case());
+                let method_name = snake_with_suffix(&snake_ident(name), "opt");
                 code.push_str(&format!(
                     "    #[inline]\n    pub fn {method}(&self) -> Option<{ty}> {{\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(raw) }}\n    }}\n",
                     method = method_name,
@@ -3382,7 +3532,7 @@ fn composite_null_constants(
                     Some(t) => t,
                     None => continue,
                 };
-                let cname = format!("{}_NULL", name.to_uppercase());
+                let cname = format!("{}_NULL", const_ident(name));
                 if let Some(len) = length {
                     if null_value.is_none() {
                         continue;
@@ -3436,16 +3586,26 @@ fn composite_null_constants(
                     Some(t) => t,
                     None => continue,
                 };
-                let cname = format!("{}_NULL", name.to_uppercase());
+                let cname = format!("{}_NULL", const_ident(name));
                 if let Some(len) = length {
                     if null_value.is_none() {
                         continue;
                     }
                     if let Some((_, expr)) = const_array_expr(prim, &rust_type, null_raw, len) {
-                        code.push_str(&format!("    pub const {}: {} = {};\n", cname, ty, expr));
+                        code.push_str(&format!(
+                            "    pub const {}: {} = {};\n",
+                            cname,
+                            type_ident(ty),
+                            expr
+                        ));
                     }
                 } else if let Some(expr) = const_scalar_expr(prim, &rust_type, null_raw) {
-                    code.push_str(&format!("    pub const {}: {} = {};\n", cname, ty, expr));
+                    code.push_str(&format!(
+                        "    pub const {}: {} = {};\n",
+                        cname,
+                        type_ident(ty),
+                        expr
+                    ));
                 }
             }
         }
@@ -3525,7 +3685,7 @@ fn composite_field_offset(
     schema: &Schema,
     opts: &GeneratorOptions,
 ) -> Option<usize> {
-    let target = field_name.to_snake_case();
+    let target = snake_ident(field_name);
     if let Some(TypeDef::Composite { fields, .. }) = schema.types.get(ty) {
         let mut cur = 0usize;
         for f in fields {
@@ -3537,7 +3697,7 @@ fn composite_field_offset(
                     presence,
                     ..
                 } => {
-                    if name.to_snake_case() == target {
+                    if snake_ident(name) == target {
                         return Some(cur);
                     }
                     if presence.as_deref() == Some("constant") {
@@ -3550,7 +3710,7 @@ fn composite_field_offset(
                     }
                 }
                 CompositeField::Ref { name, ty } => {
-                    if name.to_snake_case() == target {
+                    if snake_ident(name) == target {
                         return Some(cur);
                     }
                     cur += type_size_bytes(ty, schema, opts, 0, true)?;

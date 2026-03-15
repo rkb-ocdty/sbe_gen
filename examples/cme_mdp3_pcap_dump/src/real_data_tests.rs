@@ -353,22 +353,22 @@ fn template_30_builder_roundtrip() {
 
         set_u8(
             &mut out,
-            security_status::SecurityStatus30::MATCHEVENTINDICATOR_OFFSET as usize,
+            security_status::SecurityStatus30::MATCH_EVENT_INDICATOR_OFFSET as usize,
             msg.match_event_indicator.0,
         );
         set_u8(
             &mut out,
-            security_status::SecurityStatus30::SECURITYTRADINGSTATUS_OFFSET as usize,
+            security_status::SecurityStatus30::SECURITY_TRADING_STATUS_OFFSET as usize,
             msg.security_trading_status.0,
         );
         set_u8(
             &mut out,
-            security_status::SecurityStatus30::HALTREASON_OFFSET as usize,
+            security_status::SecurityStatus30::HALT_REASON_OFFSET as usize,
             msg.halt_reason.0,
         );
         set_u8(
             &mut out,
-            security_status::SecurityStatus30::SECURITYTRADINGEVENT_OFFSET as usize,
+            security_status::SecurityStatus30::SECURITY_TRADING_EVENT_OFFSET as usize,
             msg.security_trading_event.0,
         );
 
@@ -408,7 +408,7 @@ fn template_47_builder_roundtrip() {
         let mut out = builder.finish();
         set_u8(
             &mut out,
-            inc_book::MDIncrementalRefreshOrderBook47::MATCHEVENTINDICATOR_OFFSET as usize,
+            inc_book::MDIncrementalRefreshOrderBook47::MATCH_EVENT_INDICATOR_OFFSET as usize,
             msg.match_event_indicator.0,
         );
 
@@ -419,12 +419,12 @@ fn template_47_builder_roundtrip() {
             let entry_base = base + index * entry_len;
             set_u8(
                 &mut out,
-                entry_base + inc_book::NoMDEntriesEntry::MDUPDATEACTION_OFFSET as usize,
+                entry_base + inc_book::NoMDEntriesEntry::MD_UPDATE_ACTION_OFFSET as usize,
                 entry.body.md_update_action.0,
             );
             set_u8(
                 &mut out,
-                entry_base + inc_book::NoMDEntriesEntry::MDENTRYTYPE_OFFSET as usize,
+                entry_base + inc_book::NoMDEntriesEntry::MD_ENTRY_TYPE_OFFSET as usize,
                 entry.body.md_entry_type.0,
             );
         }
@@ -484,7 +484,8 @@ fn template_48_builder_roundtrip() {
         let mut out = builder.finish();
         set_u8(
             &mut out,
-            trade_summary::MDIncrementalRefreshTradeSummary48::MATCHEVENTINDICATOR_OFFSET as usize,
+            trade_summary::MDIncrementalRefreshTradeSummary48::MATCH_EVENT_INDICATOR_OFFSET
+                as usize,
             msg.match_event_indicator.0,
         );
 
@@ -495,12 +496,12 @@ fn template_48_builder_roundtrip() {
             let entry_base = base + index * entry_len;
             set_u8(
                 &mut out,
-                entry_base + trade_summary::NoMDEntriesEntry::AGGRESSORSIDE_OFFSET as usize,
+                entry_base + trade_summary::NoMDEntriesEntry::AGGRESSOR_SIDE_OFFSET as usize,
                 entry.body.aggressor_side.0,
             );
             set_u8(
                 &mut out,
-                entry_base + trade_summary::NoMDEntriesEntry::MDUPDATEACTION_OFFSET as usize,
+                entry_base + trade_summary::NoMDEntriesEntry::MD_UPDATE_ACTION_OFFSET as usize,
                 entry.body.md_update_action.0,
             );
         }
@@ -546,7 +547,7 @@ fn template_51_builder_roundtrip() {
         let mut out = builder.finish();
         set_u8(
             &mut out,
-            session_stats::MDIncrementalRefreshSessionStatistics51::MATCHEVENTINDICATOR_OFFSET
+            session_stats::MDIncrementalRefreshSessionStatistics51::MATCH_EVENT_INDICATOR_OFFSET
                 as usize,
             msg.match_event_indicator.0,
         );
@@ -558,17 +559,17 @@ fn template_51_builder_roundtrip() {
             let entry_base = base + index * entry_len;
             set_u8(
                 &mut out,
-                entry_base + session_stats::NoMDEntriesEntry::OPENCLOSESETTLFLAG_OFFSET as usize,
+                entry_base + session_stats::NoMDEntriesEntry::OPEN_CLOSE_SETTL_FLAG_OFFSET as usize,
                 entry.body.open_close_settl_flag.0,
             );
             set_u8(
                 &mut out,
-                entry_base + session_stats::NoMDEntriesEntry::MDUPDATEACTION_OFFSET as usize,
+                entry_base + session_stats::NoMDEntriesEntry::MD_UPDATE_ACTION_OFFSET as usize,
                 entry.body.md_update_action.0,
             );
             set_u8(
                 &mut out,
-                entry_base + session_stats::NoMDEntriesEntry::MDENTRYTYPE_OFFSET as usize,
+                entry_base + session_stats::NoMDEntriesEntry::MD_ENTRY_TYPE_OFFSET as usize,
                 entry.body.md_entry_type.0,
             );
         }

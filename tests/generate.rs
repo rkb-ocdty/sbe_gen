@@ -28,8 +28,8 @@ fn generates_basic_schema() {
 
     let types_rs = module_map.get("types.rs").expect("types.rs emitted");
     assert!(types_rs.contains("pub struct Side"));
-    assert!(types_rs.contains("pub const Buy: Self"));
-    assert!(types_rs.contains("pub const Sell: Self"));
+    assert!(types_rs.contains("pub const BUY: Self"));
+    assert!(types_rs.contains("pub const SELL: Self"));
 
     let order_rs = module_map.get("order.rs").expect("order.rs emitted");
     assert!(order_rs.contains("pub struct Order"));
