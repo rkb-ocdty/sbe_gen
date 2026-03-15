@@ -34,7 +34,7 @@ fn generates_basic_schema() {
     let order_rs = module_map.get("order.rs").expect("order.rs emitted");
     assert!(order_rs.contains("pub struct Order"));
     assert!(order_rs.contains("pub id: U64"));
-    assert!(order_rs.contains("pub side: Side"));
+    assert!(order_rs.contains("pub side: crate::types::Side"));
     assert!(order_rs.contains("pub fn parse_prefix"));
 }
 
@@ -136,6 +136,8 @@ fn generates_groups_and_var_data() {
     assert!(book_rs.contains("LevelsEntryView"));
     assert!(book_rs.contains("VarData<'a>"));
     assert!(book_rs.contains("pub fn parse_raw"));
+    assert!(book_rs.contains("crate::types::groupSize::parse_prefix(buf)?;"));
+    assert!(book_rs.contains("pub header: &'a crate::types::groupSize"));
     assert!(module_map.contains_key("message_header.rs"));
 }
 
@@ -245,7 +247,9 @@ fn value_ref_constants_use_generated_enum_constant_names() {
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
     let module_map: HashMap<_, _> = modules.into_iter().collect();
     let order_rs = module_map.get("order.rs").expect("order.rs emitted");
-    assert!(order_rs.contains("pub const CONST_SIDE: Side = Side::BUY;"));
+    assert!(
+        order_rs.contains("pub const CONST_SIDE: crate::types::Side = crate::types::Side::BUY;")
+    );
 }
 
 #[test]
@@ -354,7 +358,7 @@ fn type_level_constants_are_not_encoded() {
         .get("const_msg.rs")
         .expect("const_msg.rs emitted");
     assert!(!msg_rs.contains("pub magic:"));
-    assert!(msg_rs.contains("pub const MAGIC: ConstU16"));
+    assert!(msg_rs.contains("pub const MAGIC: crate::types::ConstU16"));
     assert!(msg_rs.contains("U16::new(7)"));
     assert!(msg_rs.contains("pub const BLOCK_LENGTH: u16 = 4"));
 }
@@ -427,9 +431,12 @@ fn constant_fields_are_not_writable_in_builder_or_encoder() {
         .get("establish503.rs")
         .expect("establish503.rs emitted");
     assert!(!msg_rs.contains("pub fn customer_flow(&mut self, value:"));
-    assert!(msg_rs.contains("pub fn customer_flow(&self) -> ClientFlowType"));
-    assert!(msg_rs.contains("#[inline]\n    pub fn customer_flow(&self) -> ClientFlowType"));
-    assert!(msg_rs.contains("pub const CUSTOMER_FLOW: ClientFlowType"));
+    assert!(msg_rs.contains("pub fn customer_flow(&self) -> crate::types::ClientFlowType"));
+    assert!(
+        msg_rs
+            .contains("#[inline]\n    pub fn customer_flow(&self) -> crate::types::ClientFlowType")
+    );
+    assert!(msg_rs.contains("pub const CUSTOMER_FLOW: crate::types::ClientFlowType"));
 }
 
 #[test]
@@ -489,14 +496,18 @@ fn view_generates_fallback_value_required_enum_composite_and_string_helpers() {
     assert!(def_rs.contains("pub fn is_fixed_layout(&self) -> bool"));
     assert!(def_rs.contains("#[inline]\n    pub fn has_security_update_action(&self) -> bool"));
     assert!(def_rs.contains(
-        "#[inline]\n    pub fn security_update_action(&self) -> Option<&SecurityUpdateAction>"
+        "#[inline]\n    pub fn security_update_action(&self) -> Option<&crate::types::SecurityUpdateAction>"
     ));
     assert!(def_rs.contains(
-        "#[inline]\n    pub fn security_update_action_value(&self) -> Option<SecurityUpdateAction>"
+        "#[inline]\n    pub fn security_update_action_value(&self) -> Option<crate::types::SecurityUpdateAction>"
     ));
-    assert!(def_rs.contains("pub fn security_update_action_required(&self) -> Result<SecurityUpdateAction, DecodeFieldError>"));
+    assert!(
+        def_rs.contains(
+            "pub fn security_update_action_required(&self) -> Result<crate::types::SecurityUpdateAction, DecodeFieldError>"
+        )
+    );
     assert!(def_rs.contains(
-        "#[inline]\n    pub fn security_update_action_enum(&self) -> Option<SecurityUpdateActionEnum>"
+        "#[inline]\n    pub fn security_update_action_enum(&self) -> Option<crate::types::SecurityUpdateActionEnum>"
     ));
     assert!(def_rs.contains("pub fn symbol_bytes(&self) -> Option<&[u8; 6]>"));
     assert!(def_rs.contains("pub fn symbol_str(&self) -> Option<&str>"));
@@ -536,4 +547,33 @@ fn group_count_overflow_is_reported_without_panics() {
     );
     assert!(counted_rs.contains("pub const MAX_COUNT: usize = u8::MAX as usize;"));
     assert!(!counted_rs.contains("count fits in u8"));
+}
+
+#[test]
+fn message_modules_use_qualified_schema_types() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <composite name="MessageHeader">
+                    <type name="marker" primitiveType="uint8"/>
+                </composite>
+            </types>
+            <message name="Order" id="1" blockLength="1">
+                <field name="hdr" id="1" type="MessageHeader" offset="0"/>
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let order_rs = module_map.get("order.rs").expect("order.rs emitted");
+
+    assert!(!order_rs.contains("use crate::types::*;"));
+    assert!(order_rs.contains("pub hdr: crate::types::MessageHeader"));
+    assert!(
+        order_rs.contains("pub fn hdr(&mut self, value: crate::types::MessageHeader) -> &mut Self")
+    );
+    assert!(order_rs.contains(
+        "pub fn parse_with_header<'a>(body: &'a [u8], header: &crate::message_header::MessageHeader)"
+    ));
 }

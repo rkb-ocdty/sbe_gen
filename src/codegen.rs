@@ -1307,7 +1307,6 @@ fn validate_message_identifiers(
 
     let mut type_scope = NameScope::new(format!("type namespace for {}", context));
     reserve_rust_type_names(&mut type_scope);
-    type_scope.reserve("MessageHeader", "imported message header type");
     type_scope.reserve("EncodeIntoError", "generated encode-into error type");
     type_scope.reserve("DecodeFieldError", "generated decode error type");
     type_scope.reserve("EncodeError", "generated encode error type");
@@ -2038,8 +2037,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         "use zerocopy::byteorder::{}_endian::*;\n",
         opts.endian
     ));
-    code.push_str("use crate::types::*;\n");
-    code.push_str("use crate::message_header::MessageHeader;\n\n");
+    code.push('\n');
     if has_var_data || has_fixed_string_helpers {
         code.push_str("use core::str;\n\n");
     }
@@ -2225,7 +2223,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
         let offset = layout.offset;
         let field_name = snake_ident(&field.name);
         if let Some(resolved_type) =
-            resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+            resolve_message_type(&field.ty, schema, opts, field.byte_order.as_deref())
         {
             let param_ty = builder_param_type(&resolved_type);
             let encoded_expr = builder_value_expr("value", &resolved_type);
@@ -2284,7 +2282,7 @@ fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> 
     }
     code.push_str("    pub fn finish(self) -> Vec<u8> {\n        self.buf\n    }\n");
     code.push_str(
-        "    pub fn finish_with_header(self) -> Vec<u8> {\n        let mut out = Vec::with_capacity(self.buf.len() + core::mem::size_of::<MessageHeader>());\n        let header = MessageHeader {\n            block_length: U16::new(Self::BLOCK_LENGTH),\n            template_id: U16::new(Self::TEMPLATE_ID),\n            schema_id: U16::new(Self::SCHEMA_ID),\n            version: U16::new(Self::SCHEMA_VERSION),\n        };\n        out.extend_from_slice(header.as_bytes());\n        out.extend_from_slice(&self.buf);\n        out\n    }\n",
+        "    pub fn finish_with_header(self) -> Vec<u8> {\n        let mut out = Vec::with_capacity(self.buf.len() + core::mem::size_of::<crate::message_header::MessageHeader>());\n        let header = crate::message_header::MessageHeader {\n            block_length: U16::new(Self::BLOCK_LENGTH),\n            template_id: U16::new(Self::TEMPLATE_ID),\n            schema_id: U16::new(Self::SCHEMA_ID),\n            version: U16::new(Self::SCHEMA_VERSION),\n        };\n        out.extend_from_slice(header.as_bytes());\n        out.extend_from_slice(&self.buf);\n        out\n    }\n",
     );
     code.push_str("}\n\n");
     code.push_str(&format!(
@@ -2314,7 +2312,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
         let offset = layout.offset;
         let field_name = snake_ident(&field.name);
         if let Some(resolved_type) =
-            resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+            resolve_message_type(&field.ty, schema, opts, field.byte_order.as_deref())
         {
             let param_ty = builder_param_type(&resolved_type);
             let encoded_expr = builder_value_expr("value", &resolved_type);
@@ -2379,7 +2377,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
         encoder = encoder_name
     ));
     code.push_str(&format!(
-        "    /// Encode header + body into `dst` without allocation.\n    ///\n    /// `dst` must fit `size_of::<MessageHeader>() + body_len`. Returns total bytes written.\n    pub fn encode_with_header_into<F>(dst: &mut [u8], header: MessageHeader, f: F) -> Result<usize, EncodeIntoError>\n    where\n        F: FnOnce(&mut {encoder}<'_>) -> Result<(), EncodeIntoError>,\n    {{\n        let header_len = core::mem::size_of::<MessageHeader>();\n        if dst.len() < header_len {{\n            return Err(EncodeIntoError::BufferTooSmall {{ required: header_len, available: dst.len() }});\n        }}\n        let body_len = {{\n            let (_, body_dst) = dst.split_at_mut(header_len);\n            let mut encoder = {encoder}::new(body_dst)?;\n            f(&mut encoder)?;\n            encoder.finish()\n        }};\n        let total = header_len.checked_add(body_len).ok_or(EncodeIntoError::InvalidState(\"encoded frame length overflow\"))?;\n        if dst.len() < total {{\n            return Err(EncodeIntoError::BufferTooSmall {{ required: total, available: dst.len() }});\n        }}\n        write_bytes_into(dst, 0, &header)?;\n        Ok(total)\n    }}\n",
+        "    /// Encode header + body into `dst` without allocation.\n    ///\n    /// `dst` must fit `size_of::<crate::message_header::MessageHeader>() + body_len`. Returns total bytes written.\n    pub fn encode_with_header_into<F>(dst: &mut [u8], header: crate::message_header::MessageHeader, f: F) -> Result<usize, EncodeIntoError>\n    where\n        F: FnOnce(&mut {encoder}<'_>) -> Result<(), EncodeIntoError>,\n    {{\n        let header_len = core::mem::size_of::<crate::message_header::MessageHeader>();\n        if dst.len() < header_len {{\n            return Err(EncodeIntoError::BufferTooSmall {{ required: header_len, available: dst.len() }});\n        }}\n        let body_len = {{\n            let (_, body_dst) = dst.split_at_mut(header_len);\n            let mut encoder = {encoder}::new(body_dst)?;\n            f(&mut encoder)?;\n            encoder.finish()\n        }};\n        let total = header_len.checked_add(body_len).ok_or(EncodeIntoError::InvalidState(\"encoded frame length overflow\"))?;\n        if dst.len() < total {{\n            return Err(EncodeIntoError::BufferTooSmall {{ required: total, available: dst.len() }});\n        }}\n        write_bytes_into(dst, 0, &header)?;\n        Ok(total)\n    }}\n",
         encoder = encoder_name
     ));
     code.push_str("}\n\n");
@@ -2446,7 +2444,9 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
             offset = layout.offset,
             size = layout.size
         ));
-        if let Some(resolved) = resolve_type(&field.ty, schema, opts, field.byte_order.as_deref()) {
+        if let Some(resolved) =
+            resolve_message_type(&field.ty, schema, opts, field.byte_order.as_deref())
+        {
             code.push_str(&format!(
                 "    #[inline]\n    pub fn {fname}(&self) -> Option<&{ty}> {{\n        if !self.has_{fname}() {{ return None; }}\n        if let Some(msg) = self.body.parsed() {{ return Some(&msg.{field_name}); }}\n        let bytes = &self.body.bytes()[{offset}..{offset_plus}];\n        let (r, _) = Ref::<_, {ty}>::from_prefix(bytes).ok()?;\n        Some(Ref::into_ref(r))\n    }}\n",
                 fname = fname,
@@ -2471,7 +2471,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
     }
     code.push_str("}\n\n");
     code.push_str(&format!(
-        "pub fn parse_with_header<'a>(body: &'a [u8], header: &MessageHeader) -> Option<({name}View<'a>, &'a [u8])> {{\n    let mut acting_block_length = header.block_length.get() as usize;\n    if acting_block_length == 0 {{ acting_block_length = {name}::BLOCK_LENGTH as usize; }}\n    let acting_version = header.version.get();\n    if body.len() < acting_block_length {{ return None; }}\n    let needed = core::mem::size_of::<{name}>();\n    let (prefix, rest) = body.split_at(acting_block_length);\n    let (parsed, raw) = if acting_block_length >= needed {{\n        let raw = &prefix[..needed];\n        let (msg, _) = Ref::<_, {name}>::from_prefix(raw).ok()?;\n        (Some(Ref::into_ref(msg)), raw)\n    }} else {{\n        (None, prefix)\n    }};\n    let view = {name}View {{ body: {name}Body {{ parsed, raw }}, acting_block_length, acting_version }};\n    Some((view, rest))\n}}\n",
+        "pub fn parse_with_header<'a>(body: &'a [u8], header: &crate::message_header::MessageHeader) -> Option<({name}View<'a>, &'a [u8])> {{\n    let mut acting_block_length = header.block_length.get() as usize;\n    if acting_block_length == 0 {{ acting_block_length = {name}::BLOCK_LENGTH as usize; }}\n    let acting_version = header.version.get();\n    if body.len() < acting_block_length {{ return None; }}\n    let needed = core::mem::size_of::<{name}>();\n    let (prefix, rest) = body.split_at(acting_block_length);\n    let (parsed, raw) = if acting_block_length >= needed {{\n        let raw = &prefix[..needed];\n        let (msg, _) = Ref::<_, {name}>::from_prefix(raw).ok()?;\n        (Some(Ref::into_ref(msg)), raw)\n    }} else {{\n        (None, prefix)\n    }};\n    let view = {name}View {{ body: {name}Body {{ parsed, raw }}, acting_block_length, acting_version }};\n    Some((view, rest))\n}}\n",
         name = msg_name
     ));
     code
@@ -2655,6 +2655,42 @@ fn resolve_type(
     }
 }
 
+fn schema_type_path(name: &str) -> String {
+    format!("crate::types::{}", type_ident(name))
+}
+
+fn schema_enum_path(name: &str) -> String {
+    format!("crate::types::{}", enum_name(name))
+}
+
+fn resolve_message_type(
+    name: &str,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+    override_endian: Option<&str>,
+) -> Option<String> {
+    let resolved = resolve_type(name, schema, opts, override_endian)?;
+    match schema.types.get(name) {
+        Some(TypeDef::Primitive {
+            name: type_name,
+            length,
+            ..
+        }) => {
+            if length.is_some()
+                || (override_endian.is_some() && override_endian != Some(opts.endian.as_str()))
+            {
+                Some(resolved)
+            } else {
+                Some(schema_type_path(type_name))
+            }
+        }
+        Some(TypeDef::Enum { name, .. })
+        | Some(TypeDef::Set { name, .. })
+        | Some(TypeDef::Composite { name, .. }) => Some(schema_type_path(name)),
+        None => Some(resolved),
+    }
+}
+
 #[allow(dead_code)]
 fn resolved_size_bytes(rust_type: &str) -> Option<usize> {
     let ty = rust_type.trim();
@@ -2783,7 +2819,9 @@ fn write_fields_with_offsets(
         }
         let ty_name = &field.ty;
         let field_name = snake_ident(&field.name);
-        if let Some(rust_type) = resolve_type(ty_name, schema, opts, field.byte_order.as_deref()) {
+        if let Some(rust_type) =
+            resolve_message_type(ty_name, schema, opts, field.byte_order.as_deref())
+        {
             let field_sz = field_size_bytes(field, schema, opts);
             if let (Some(target), Some(cur)) = (field.offset.map(|o| o as usize), cur_offset)
                 && target > cur
@@ -2924,7 +2962,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     let has_nested = !g_nested.is_empty();
     let has_any_var = has_data || has_nested;
     let dim = dimension_fields(schema, &g.dimension_type, opts);
-    let dim_ty = type_ident(&g.dimension_type);
+    let dim_ty = schema_type_path(&g.dimension_type);
     let count_max = count_max_expr(&dim.count_field_ty);
     let block_len_expr = if let Some(bl) = g.block_length {
         bl.to_string()
@@ -3105,7 +3143,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
                 size = layout.size
             ));
             if let Some(resolved) =
-                resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+                resolve_message_type(&field.ty, schema, opts, field.byte_order.as_deref())
             {
                 code.push_str(&format!(
                     "    #[inline]\n    pub fn {fname}(&self) -> Option<&{ty}> {{\n        if !self.has_{fname}() {{ return None; }}\n        if let Some(entry) = self.body.parsed() {{ return Some(&entry.{field_name}); }}\n        let bytes = &self.body.bytes()[{offset}..{offset_plus}];\n        let (r, _) = Ref::<_, {ty}>::from_prefix(bytes).ok()?;\n        Some(Ref::into_ref(r))\n    }}\n",
@@ -3193,7 +3231,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         let offset = layout.offset;
         let field_name = snake_ident(&field.name);
         if let Some(resolved_type) =
-            resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+            resolve_message_type(&field.ty, schema, opts, field.byte_order.as_deref())
         {
             let param_ty = builder_param_type(&resolved_type);
             let encoded_expr = builder_value_expr("value", &resolved_type);
@@ -3306,7 +3344,7 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         let offset = layout.offset;
         let field_name = snake_ident(&field.name);
         if let Some(resolved_type) =
-            resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+            resolve_message_type(&field.ty, schema, opts, field.byte_order.as_deref())
         {
             let param_ty = builder_param_type(&resolved_type);
             let encoded_expr = builder_value_expr("value", &resolved_type);
@@ -3742,13 +3780,13 @@ fn constant_field_value_expr(
     if let Some(value_ref) = &field.value_ref
         && let Some((type_name, variant)) = value_ref.split_once('.')
     {
-        let type_name = type_ident(type_name);
+        let type_name = schema_type_path(type_name);
         let variant = const_ident(variant);
         return Some((type_name.clone(), format!("{type_name}::{variant}")));
     }
 
     if let Some(val) = field.constant.as_deref() {
-        let const_ty = resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+        let const_ty = resolve_message_type(&field.ty, schema, opts, field.byte_order.as_deref())
             .unwrap_or_else(|| type_ident(&field.ty));
         if let Some(td) = schema.types.get(&field.ty) {
             match td {
@@ -3766,7 +3804,7 @@ fn constant_field_value_expr(
                 TypeDef::Enum { encoding, .. } | TypeDef::Set { encoding, .. } => {
                     let rust_type = primitive_to_rust(encoding, opts)?;
                     let raw_expr = const_scalar_expr(encoding, &rust_type, val)?;
-                    let field_ty = type_ident(&field.ty);
+                    let field_ty = schema_type_path(&field.ty);
                     return Some((field_ty.clone(), format!("{field_ty}({raw_expr})")));
                 }
                 TypeDef::Composite { .. } => {}
@@ -3785,7 +3823,7 @@ fn constant_field_value_expr(
     }) = schema.types.get(&field.ty)
     {
         let rust_type = primitive_to_rust(primitive, opts)?;
-        let field_ty = type_ident(&field.ty);
+        let field_ty = schema_type_path(&field.ty);
         if let Some(len) = length {
             let (_, expr) = const_array_expr(primitive, &rust_type, val, *len)?;
             return Some((field_ty, expr));
@@ -3802,7 +3840,7 @@ fn constant_field_value_expr(
             schema.types.get(&alias_target),
             Some(TypeDef::Enum { .. } | TypeDef::Set { .. })
         ) {
-            format!("{}({raw_expr})", type_ident(&alias_target))
+            format!("{}({raw_expr})", schema_type_path(&alias_target))
         } else {
             raw_expr
         };
@@ -4016,8 +4054,8 @@ fn view_field_value_info(
     schema: &Schema,
     opts: &GeneratorOptions,
 ) -> Option<ViewFieldValueInfo> {
-    let resolved = resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())?;
-    let field_ty = type_ident(&field.ty);
+    let resolved = resolve_message_type(&field.ty, schema, opts, field.byte_order.as_deref())?;
+    let field_ty = schema_type_path(&field.ty);
     if resolved.trim().starts_with('[') {
         return Some(ViewFieldValueInfo {
             value_ty: resolved,
@@ -4221,8 +4259,8 @@ fn emit_view_field_helpers(
     if let Some(TypeDef::Enum { values, .. }) = schema.types.get(&field.ty)
         && !values.is_empty()
     {
-        let field_ty = type_ident(&field.ty);
-        let enum_name = enum_name(&field.ty);
+        let field_ty = schema_type_path(&field.ty);
+        let enum_name = schema_enum_path(&field.ty);
         if value_info.nullable_inner_ty.as_deref() == Some(field_ty.as_str()) {
             code.push_str(&format!(
                 "    #[inline]\n    pub fn {enum_method_name}(&self) -> Option<{enum_name}> {{\n        let value = self.{value_name}()?;\n        value.and_then(|raw| raw.as_enum())\n    }}\n",
@@ -4251,7 +4289,8 @@ fn emit_view_field_helpers(
         ));
     }
 
-    if let Some(resolved) = resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+    if let Some(resolved) =
+        resolve_message_type(&field.ty, schema, opts, field.byte_order.as_deref())
         && let Some(len) = parse_u8_array_len(&resolved)
     {
         code.push_str(&format!(
@@ -4322,7 +4361,7 @@ fn optional_methods_for_fields(
                 code.push_str(&format!(
                     "    #[inline]\n    pub fn {method}(&self) -> Option<{ty}> {{\n        let v = {self_expr}.{field};\n        let raw = {val};\n        if {cond} {{ None }} else {{ Some(v) }}\n    }}\n",
                     method = method_name,
-                    ty = type_ident(&field.ty),
+                    ty = schema_type_path(&field.ty),
                     self_expr = self_expr,
                     field = field_name,
                     val = val_expr,
