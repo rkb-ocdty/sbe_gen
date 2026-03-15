@@ -71,6 +71,71 @@ fn rejects_unsupported_var_data_length_types() {
 }
 
 #[test]
+fn rejects_unknown_group_dimension_types() {
+    let xml = r#"
+        <messageSchema package="test">
+            <message name="BadGroup" id="1">
+                <group name="Items" id="1" dimensionType="UnknownSize">
+                    <field name="x" id="1" type="uint8" />
+                </group>
+            </message>
+        </messageSchema>
+    "#;
+
+    let err =
+        generate(xml, &GeneratorOptions::default()).expect_err("unknown dimension type must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("unknown dimensionType 'UnknownSize'"));
+    assert!(msg.contains("message 'BadGroup' group 'Items'"));
+}
+
+#[test]
+fn rejects_non_composite_group_dimension_types() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <type name="NotComposite" primitiveType="uint16"/>
+            </types>
+            <message name="BadGroup" id="1">
+                <group name="Items" id="1" dimensionType="NotComposite">
+                    <field name="x" id="1" type="uint8" />
+                </group>
+            </message>
+        </messageSchema>
+    "#;
+
+    let err = generate(xml, &GeneratorOptions::default())
+        .expect_err("non-composite dimension type must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("dimensionType 'NotComposite'"));
+    assert!(msg.contains("must be a composite"));
+}
+
+#[test]
+fn rejects_group_dimension_types_with_too_few_fields() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <composite name="ShortDim">
+                    <type name="blockLength" primitiveType="uint16"/>
+                </composite>
+            </types>
+            <message name="BadGroup" id="1">
+                <group name="Items" id="1" dimensionType="ShortDim">
+                    <field name="x" id="1" type="uint8" />
+                </group>
+            </message>
+        </messageSchema>
+    "#;
+
+    let err = generate(xml, &GeneratorOptions::default())
+        .expect_err("dimension headers with one field must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("dimensionType 'ShortDim'"));
+    assert!(msg.contains("must expose at least two usable integer fields"));
+}
+
+#[test]
 fn rejects_message_name_collisions_after_sanitization() {
     let xml = r#"
         <messageSchema package="test">

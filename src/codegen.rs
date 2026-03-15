@@ -409,19 +409,7 @@ fn validate_group_types(
     opts: &GeneratorOptions,
     scope: &str,
 ) -> Result<(), CodegenError> {
-    let dims = dimension_fields(schema, &group.dimension_type, opts);
-    if !is_supported_dimension_int_type(&dims.block_field_ty) {
-        return Err(CodegenError::InvalidSchema(format!(
-            "unsupported blockLength type '{}' in {}",
-            dims.block_field_ty, scope
-        )));
-    }
-    if !is_supported_dimension_int_type(&dims.count_field_ty) {
-        return Err(CodegenError::InvalidSchema(format!(
-            "unsupported numInGroup/count type '{}' in {}",
-            dims.count_field_ty, scope
-        )));
-    }
+    let _ = dimension_fields(schema, &group.dimension_type, opts, scope)?;
 
     for member in &group.members {
         match member {
@@ -1555,7 +1543,7 @@ pub fn generate(
     ));
     // emit one file per message
     for msg in &schema.messages {
-        let code = generate_message(msg, schema, opts);
+        let code = generate_message(msg, schema, opts)?;
         let fname = format!("{}.rs", snake_ident(&msg.name));
         files.push((fname, code));
     }
@@ -2009,7 +1997,11 @@ fn generate_message_header(opts: &GeneratorOptions) -> String {
 /// Generate the module for a single message.  This includes imports,
 /// macro definition and the message struct itself.  Fields using
 /// unsupported types are skipped.
-fn generate_message(msg: &Message, schema: &Schema, opts: &GeneratorOptions) -> String {
+fn generate_message(
+    msg: &Message,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) -> Result<String, CodegenError> {
     let msg_name = type_ident(&msg.name);
     let fields = message_fields(msg);
     let groups = message_groups(msg);
@@ -2383,7 +2375,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
     code.push_str("}\n\n");
     // group helpers (supports nesting)
     for g in groups {
-        emit_group(g, schema, opts, &mut code);
+        emit_group(g, schema, opts, &mut code)?;
     }
     // acting version aware view
     code.push_str(&format!(
@@ -2474,7 +2466,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
         "pub fn parse_with_header<'a>(body: &'a [u8], header: &crate::message_header::MessageHeader) -> Option<({name}View<'a>, &'a [u8])> {{\n    let mut acting_block_length = header.block_length.get() as usize;\n    if acting_block_length == 0 {{ acting_block_length = {name}::BLOCK_LENGTH as usize; }}\n    let acting_version = header.version.get();\n    if body.len() < acting_block_length {{ return None; }}\n    let needed = core::mem::size_of::<{name}>();\n    let (prefix, rest) = body.split_at(acting_block_length);\n    let (parsed, raw) = if acting_block_length >= needed {{\n        let raw = &prefix[..needed];\n        let (msg, _) = Ref::<_, {name}>::from_prefix(raw).ok()?;\n        (Some(Ref::into_ref(msg)), raw)\n    }} else {{\n        (None, prefix)\n    }};\n    let view = {name}View {{ body: {name}Body {{ parsed, raw }}, acting_block_length, acting_version }};\n    Some((view, rest))\n}}\n",
         name = msg_name
     ));
-    code
+    Ok(code)
 }
 
 /// Map an SBE primitive to a Rust zero‑copy type.  Returns `None` if
@@ -2933,7 +2925,12 @@ fn length_kind_token(kind: LengthKind) -> &'static str {
     }
 }
 
-fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut String) {
+fn emit_group(
+    g: &Group,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+    code: &mut String,
+) -> Result<(), CodegenError> {
     let group_name = type_ident(&g.name);
     let group_snake = snake_ident(&g.name);
     let entry_struct = format!("{}Entry", group_name);
@@ -2961,7 +2958,8 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     let has_data = !g_data.is_empty();
     let has_nested = !g_nested.is_empty();
     let has_any_var = has_data || has_nested;
-    let dim = dimension_fields(schema, &g.dimension_type, opts);
+    let group_context = format!("group '{}'", g.name);
+    let dim = dimension_fields(schema, &g.dimension_type, opts, &group_context)?;
     let dim_ty = schema_type_path(&g.dimension_type);
     let count_max = count_max_expr(&dim.count_field_ty);
     let block_len_expr = if let Some(bl) = g.block_length {
@@ -2970,10 +2968,32 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
         format!("core::mem::size_of::<{}>()", entry_struct)
     };
     let dim_block_offset =
-        composite_field_offset(&g.dimension_type, &dim.block_field, schema, opts).unwrap_or(0);
-    let dim_count_offset =
-        composite_field_offset(&g.dimension_type, &dim.count_field, schema, opts).unwrap_or(0);
-    let dim_size = type_size_bytes(&g.dimension_type, schema, opts, 0, true).unwrap_or(0);
+        composite_field_offset(&g.dimension_type, &dim.block_field, schema, opts).ok_or_else(
+            || {
+                CodegenError::InvalidSchema(format!(
+                    "failed to resolve blockLength field '{}' in dimensionType '{}' for group '{}'",
+                    dim.block_field, g.dimension_type, g.name
+                ))
+            },
+        )?;
+    let dim_count_offset = composite_field_offset(
+        &g.dimension_type,
+        &dim.count_field,
+        schema,
+        opts,
+    )
+    .ok_or_else(|| {
+        CodegenError::InvalidSchema(format!(
+            "failed to resolve numInGroup/count field '{}' in dimensionType '{}' for group '{}'",
+            dim.count_field, g.dimension_type, g.name
+        ))
+    })?;
+    let dim_size = type_size_bytes(&g.dimension_type, schema, opts, 0, true).ok_or_else(|| {
+        CodegenError::InvalidSchema(format!(
+            "failed to compute size for dimensionType '{}' used by group '{}'",
+            g.dimension_type, g.name
+        ))
+    })?;
 
     code.push_str(&format!(
         "pub fn parse_{}<'a>(buf: &'a [u8]) -> Option<{}<'a>> {{\n",
@@ -3517,8 +3537,9 @@ fn emit_group(g: &Group, schema: &Schema, opts: &GeneratorOptions, code: &mut St
     code.push_str("        cursor = tail;\n    }\n    Some(cursor)\n}\n\n");
 
     for nested in &g_nested {
-        emit_group(nested, schema, opts, code);
+        emit_group(nested, schema, opts, code)?;
     }
+    Ok(())
 }
 
 struct DimensionFields {
@@ -3551,84 +3572,129 @@ fn dimension_field_rust_type(ty: &str, schema: &Schema, opts: &GeneratorOptions)
     }
 }
 
-fn dimension_fields(schema: &Schema, dim_type: &str, opts: &GeneratorOptions) -> DimensionFields {
-    if let Some(TypeDef::Composite { fields, .. }) = schema.types.get(dim_type) {
-        let mut dim_fields = Vec::new();
-        for f in fields {
-            match f {
-                CompositeField::Type {
-                    name,
-                    primitive,
-                    presence,
-                    ..
-                } => {
-                    if presence.as_deref() == Some("constant") {
-                        continue;
-                    }
-                    if let Some(rust) = primitive_to_rust(primitive, opts) {
-                        dim_fields.push((snake_ident(name), rust));
-                    }
+fn dimension_fields(
+    schema: &Schema,
+    dim_type: &str,
+    opts: &GeneratorOptions,
+    scope: &str,
+) -> Result<DimensionFields, CodegenError> {
+    let Some(def) = schema.types.get(dim_type) else {
+        return Err(CodegenError::InvalidSchema(format!(
+            "unknown dimensionType '{}' in {}",
+            dim_type, scope
+        )));
+    };
+    let TypeDef::Composite { fields, .. } = def else {
+        return Err(CodegenError::InvalidSchema(format!(
+            "dimensionType '{}' in {} must be a composite",
+            dim_type, scope
+        )));
+    };
+
+    validate_type_reference(dim_type, schema, opts, scope, &mut Vec::new())?;
+
+    let mut dim_fields = Vec::new();
+    for f in fields {
+        match f {
+            CompositeField::Type {
+                name,
+                primitive,
+                presence,
+                ..
+            } => {
+                if presence.as_deref() == Some("constant") {
+                    continue;
                 }
-                CompositeField::Ref { name, ty } => {
-                    if let Some(rust) = dimension_field_rust_type(ty, schema, opts) {
-                        dim_fields.push((snake_ident(name), rust));
-                    }
+                let Some(rust) = primitive_to_rust(primitive, opts) else {
+                    return Err(CodegenError::InvalidSchema(format!(
+                        "dimensionType '{}' field '{}' in {} uses unsupported primitive '{}'",
+                        dim_type, name, scope, primitive
+                    )));
+                };
+                if !is_supported_dimension_int_type(&rust) {
+                    return Err(CodegenError::InvalidSchema(format!(
+                        "dimensionType '{}' field '{}' in {} must be an integer type, got '{}'",
+                        dim_type, name, scope, primitive
+                    )));
                 }
+                dim_fields.push((snake_ident(name), rust));
+            }
+            CompositeField::Ref { name, ty } => {
+                let Some(rust) = dimension_field_rust_type(ty, schema, opts) else {
+                    return Err(CodegenError::InvalidSchema(format!(
+                        "dimensionType '{}' field '{}' in {} must resolve to an integer type",
+                        dim_type, name, scope
+                    )));
+                };
+                if !is_supported_dimension_int_type(&rust) {
+                    return Err(CodegenError::InvalidSchema(format!(
+                        "dimensionType '{}' field '{}' in {} must resolve to an integer type",
+                        dim_type, name, scope
+                    )));
+                }
+                dim_fields.push((snake_ident(name), rust));
             }
         }
+    }
 
-        let norm = |name: &str| name.replace('_', "").to_lowercase();
-        let block = dim_fields
-            .iter()
-            .find(|(n, _)| norm(n) == "blocklength")
-            .cloned()
-            .or_else(|| {
-                dim_fields
-                    .iter()
-                    .find(|(n, _)| norm(n).contains("blocklength"))
-                    .cloned()
-            })
-            .or_else(|| dim_fields.first().cloned())
-            .unwrap_or_else(|| ("block_length".into(), "U16".into()));
-        let mut count = dim_fields
-            .iter()
-            .find(|(n, _)| {
-                *n != block.0 && {
-                    let nn = norm(n);
-                    nn == "numingroup" || nn == "count"
-                }
-            })
-            .cloned()
-            .or_else(|| {
-                dim_fields
-                    .iter()
-                    .find(|(n, _)| {
-                        *n != block.0 && {
-                            let nn = norm(n);
-                            nn.contains("numingroup") || nn.contains("count")
-                        }
-                    })
-                    .cloned()
-            })
-            .or_else(|| dim_fields.iter().find(|(n, _)| *n != block.0).cloned())
-            .unwrap_or_else(|| ("num_in_group".into(), "U16".into()));
-        // allow block and count to be the same when only one field exists: duplicate
-        if block.0 == count.0 && dim_fields.len() <= 1 {
-            count = ("num_in_group".into(), block.1.clone());
-        }
-        return DimensionFields {
-            block_field: block.0,
-            block_field_ty: block.1,
-            count_field: count.0,
-            count_field_ty: count.1,
-        };
+    if dim_fields.len() < 2 {
+        return Err(CodegenError::InvalidSchema(format!(
+            "dimensionType '{}' in {} must expose at least two usable integer fields",
+            dim_type, scope
+        )));
     }
-    DimensionFields {
-        block_field: "block_length".into(),
-        block_field_ty: "U16".into(),
-        count_field: "num_in_group".into(),
-        count_field_ty: "U16".into(),
-    }
+
+    let norm = |name: &str| name.replace('_', "").to_lowercase();
+    let block = dim_fields
+        .iter()
+        .find(|(n, _)| norm(n) == "blocklength")
+        .cloned()
+        .or_else(|| {
+            dim_fields
+                .iter()
+                .find(|(n, _)| norm(n).contains("blocklength"))
+                .cloned()
+        })
+        .or_else(|| dim_fields.first().cloned())
+        .ok_or_else(|| {
+            CodegenError::InvalidSchema(format!(
+                "dimensionType '{}' in {} does not expose a usable blockLength field",
+                dim_type, scope
+            ))
+        })?;
+    let count = dim_fields
+        .iter()
+        .find(|(n, _)| {
+            *n != block.0 && {
+                let nn = norm(n);
+                nn == "numingroup" || nn == "count"
+            }
+        })
+        .cloned()
+        .or_else(|| {
+            dim_fields
+                .iter()
+                .find(|(n, _)| {
+                    *n != block.0 && {
+                        let nn = norm(n);
+                        nn.contains("numingroup") || nn.contains("count")
+                    }
+                })
+                .cloned()
+        })
+        .or_else(|| dim_fields.iter().find(|(n, _)| *n != block.0).cloned())
+        .ok_or_else(|| {
+            CodegenError::InvalidSchema(format!(
+                "dimensionType '{}' in {} does not expose a usable numInGroup/count field",
+                dim_type, scope
+            ))
+        })?;
+    Ok(DimensionFields {
+        block_field: block.0,
+        block_field_ty: block.1,
+        count_field: count.0,
+        count_field_ty: count.1,
+    })
 }
 
 fn to_usize_expr(field_name: &str, ty: &str) -> String {
