@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.7.0
+
+### Changed
+- Generator validation is now fail-fast for unsupported fixed field types instead of silently skipping them.
+- Repeating-group and var-data schema validation is stricter:
+  - invalid `dimensionType` declarations now fail generation instead of producing broken Rust,
+  - unsupported var-data length encodings now fail generation up front.
+- Generated Rust identifiers are now sanitized consistently across modules, types, fields, constants, groups, and var-data helpers.
+- Post-sanitization identifier collisions now fail generation with explicit schema errors instead of silently overwriting files or emitting duplicate items.
+- `valueRef` constant fields now resolve against the generated enum/set associated constants correctly.
+- Generated message and group modules now reference schema-defined types through `crate::types::...`, avoiding collisions with generated helper types such as `MessageHeader`.
+- Group builders and encoders now report repeating-group count overflow as structured errors instead of panicking.
+
+### Documentation
+- Refreshed parser documentation to match the current AST and parsing behavior.
+
 ## 0.6.1
 
 ### Added
