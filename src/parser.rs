@@ -1,11 +1,14 @@
 //! Parsing of SBE XML schemas.
 //!
-//! This module defines a very small subset of the SBE grammar that is
-//! sufficient for generating zero‑copy Rust types.  The parser reads
-//! primitive type definitions, enums, sets, composites and messages
-//! with fields.  Nested groups and variable‑length data are recognised
-//! but ignored, allowing the generator to skip over portions of the
-//! message that it does not yet support.
+//! This module builds a lightweight in-memory representation of the
+//! subset of SBE XML needed by the generator. It preserves primitive,
+//! enum, set, and composite type definitions, message fields, nested
+//! groups, and variable-length data members, along with the metadata
+//! the generator currently consumes.
+//!
+//! The parser is intentionally permissive: it records structure and
+//! attributes but does not try to perform full semantic validation of
+//! the schema beyond required attributes and integer parsing.
 
 use std::collections::HashMap;
 use thiserror::Error;
@@ -20,7 +23,8 @@ pub struct Schema {
     pub schema_id: Option<u32>,
     /// Version declared on the schema.
     pub version: Option<u32>,
-    /// A mapping of user defined types (enums, sets, composites).
+    /// A mapping of named types from `<types>`, including primitive aliases,
+    /// enums, sets, and composites.
     pub types: HashMap<String, TypeDef>,
     /// All messages declared in the schema.
     pub messages: Vec<Message>,
@@ -29,7 +33,8 @@ pub struct Schema {
 /// A user defined type from the `<types>` section of the schema.
 #[derive(Debug, Clone)]
 pub enum TypeDef {
-    /// A simple alias around a primitive type (e.g. `<type name="Foo" primitiveType="uint8"/>`).
+    /// A named primitive definition from `<types>`, including optional
+    /// fixed-length array, presence/null metadata, and constant content.
     Primitive {
         name: String,
         primitive: String,
@@ -64,7 +69,8 @@ pub enum TypeDef {
 /// A field inside a composite definition.
 #[derive(Debug, Clone)]
 pub enum CompositeField {
-    /// A primitive type with an optional constant value.
+    /// An inline primitive member of a composite, including optional array
+    /// length, presence/null metadata, and constant content.
     Type {
         name: String,
         primitive: String,
@@ -109,7 +115,8 @@ pub enum MessageMember {
     Data(VarDataField),
 }
 
-/// A repeating group with its own fixed fields and optional variable data.
+/// A repeating group with its own fields, nested groups, and variable-length
+/// data members.
 #[derive(Debug, Clone)]
 pub struct Group {
     /// Group name.
@@ -140,8 +147,10 @@ pub enum GroupMember {
     Data(VarDataField),
 }
 
-/// A field on a message.  Only fields that map to fixed‑length types
-/// are preserved; groups and variable‑length data are skipped.
+/// A fixed-layout field on a message or group.
+///
+/// Groups and variable-length data are represented separately via
+/// [`MessageMember`] and [`GroupMember`].
 #[derive(Debug, Clone)]
 pub struct Field {
     /// The field name.
@@ -191,7 +200,8 @@ pub struct VarDataField {
     /// semanticType if provided.
     #[allow(dead_code)]
     pub semantic_type: Option<String>,
-    /// The encoding type used for the length prefix.
+    /// The referenced encoding type for the data field. In practice this is
+    /// often a composite that describes the length prefix and trailing bytes.
     pub ty: String,
 }
 
@@ -209,6 +219,9 @@ pub enum ParseError {
 }
 
 /// Parse an SBE schema from an XML string.
+///
+/// Accepts either a root `<messageSchema>` element or a document that
+/// contains a nested or namespace-qualified `messageSchema` element.
 pub fn parse_schema(xml: &str) -> Result<Schema, ParseError> {
     let doc = roxmltree::Document::parse(xml)?;
     let root = doc.root_element();
@@ -230,7 +243,8 @@ pub fn parse_schema(xml: &str) -> Result<Schema, ParseError> {
     parse_schema_from_node(root)
 }
 
-/// Internal helper to parse from a particular `messageSchema` node.
+/// Internal helper to parse from a specific `messageSchema` node once it has
+/// been located in the XML document.
 fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
     // package attribute is optional
     let package = node.attribute("package").map(|s| s.to_string());
