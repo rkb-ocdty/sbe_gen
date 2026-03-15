@@ -11,7 +11,7 @@ use crate::parser::{
     VarDataField,
 };
 use heck::{ToSnakeCase, ToUpperCamelCase};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
 const PARSE_PREFIX_METHOD: &str = "    #[inline]\n    pub fn parse_prefix(body: &[u8]) -> Option<(&Self, &[u8])> {\n        Ref::<_, Self>::from_prefix(body)\n            .ok()\n            .map(|(r, b)| (Ref::into_ref(r), b))\n    }\n";
@@ -134,6 +134,34 @@ fn upper_ident(name: &str) -> String {
         }
     }
     sanitize_ident(&out)
+}
+
+struct NameScope {
+    scope: String,
+    used: HashMap<String, String>,
+}
+
+impl NameScope {
+    fn new(scope: impl Into<String>) -> Self {
+        Self {
+            scope: scope.into(),
+            used: HashMap::new(),
+        }
+    }
+
+    fn reserve(&mut self, ident: &str, desc: &str) {
+        self.used.insert(ident.to_string(), desc.to_string());
+    }
+
+    fn claim(&mut self, ident: String, desc: String) -> Result<(), CodegenError> {
+        if let Some(prev) = self.used.insert(ident.clone(), desc.clone()) {
+            return Err(CodegenError::InvalidSchema(format!(
+                "identifier collision in {} after Rust sanitization: {} and {} both map to '{}'",
+                self.scope, prev, desc, ident
+            )));
+        }
+        Ok(())
+    }
 }
 
 fn push_file_preamble(buf: &mut String, opts: &GeneratorOptions, default_allow: Option<&str>) {
@@ -551,6 +579,964 @@ fn validate_type_reference(
     result
 }
 
+fn type_def_name(def: &TypeDef) -> &str {
+    match def {
+        TypeDef::Primitive { name, .. } => name,
+        TypeDef::Enum { name, .. } => name,
+        TypeDef::Set { name, .. } => name,
+        TypeDef::Composite { name, .. } => name,
+    }
+}
+
+fn reserve_rust_type_names(scope: &mut NameScope) {
+    for name in [
+        "bool",
+        "char",
+        "str",
+        "isize",
+        "usize",
+        "u8",
+        "i8",
+        "u16",
+        "i16",
+        "u32",
+        "i32",
+        "u64",
+        "i64",
+        "f32",
+        "f64",
+        "Ref",
+        "FromBytes",
+        "IntoBytes",
+        "KnownLayout",
+        "Immutable",
+        "Unaligned",
+        "U16",
+        "I16",
+        "U32",
+        "I32",
+        "U64",
+        "I64",
+        "F32",
+        "F64",
+    ] {
+        scope.reserve(name, "Rust/builtin imported type");
+    }
+}
+
+fn claim_struct_field_names(
+    scope: &mut NameScope,
+    context: &str,
+    fields: &[&Field],
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) -> Result<(), CodegenError> {
+    let mut cur_offset: Option<usize> = Some(0);
+    let mut pad_idx = 0usize;
+    for field in fields {
+        if field_is_constant(field, schema) {
+            continue;
+        }
+        if resolve_type(&field.ty, schema, opts, field.byte_order.as_deref()).is_none() {
+            continue;
+        }
+        let field_sz = field_size_bytes(field, schema, opts);
+        if let (Some(target), Some(cur)) = (field.offset.map(|o| o as usize), cur_offset)
+            && target > cur
+        {
+            scope.claim(
+                format!("__padding{}", pad_idx),
+                format!("padding inserted in {}", context),
+            )?;
+            pad_idx += 1;
+            cur_offset = Some(target);
+        }
+        scope.claim(
+            snake_ident(&field.name),
+            format!("field '{}' in {}", field.name, context),
+        )?;
+        if let Some(sz) = field_sz {
+            if let Some(cur) = cur_offset {
+                cur_offset = Some(cur + sz);
+            }
+        } else {
+            cur_offset = None;
+        }
+    }
+    Ok(())
+}
+
+fn field_metadata_names(field: &Field) -> Vec<String> {
+    let base = const_ident(&field.name);
+    let mut names = Vec::new();
+    if field.offset.is_some() {
+        names.push(format!("{}_OFFSET", base));
+    }
+    if field.min_value.is_some() {
+        names.push(format!("{}_MIN", base));
+    }
+    if field.max_value.is_some() {
+        names.push(format!("{}_MAX", base));
+    }
+    if field.null_value.is_some() {
+        names.push(format!("{}_NULL", base));
+    }
+    if field.initial_value.is_some() {
+        names.push(format!("{}_INITIAL", base));
+    }
+    names.push(format!("{}_SINCE_VERSION", base));
+    names.push(format!("{}_SEMANTIC_TYPE", base));
+    names
+}
+
+fn field_optional_method_name(
+    field: &Field,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) -> Option<String> {
+    if !field_is_optional(field, schema) {
+        return None;
+    }
+    if let Some(len) = type_length(&field.ty, schema)
+        && len > 1
+    {
+        return None;
+    }
+    let field_name = snake_ident(&field.name);
+    let method_name = snake_with_suffix(&field_name, "opt");
+
+    if let Some(TypeDef::Enum { encoding, .. } | TypeDef::Set { encoding, .. }) =
+        schema.types.get(&field.ty)
+    {
+        let inner_rust =
+            primitive_to_rust_endian(encoding, &opts.endian, field.byte_order.as_deref())?;
+        let _ = scalar_expr(&format!("self.{}.0", field_name), &inner_rust)?;
+        let host_type = optional_host_type(encoding)?;
+        let _ =
+            null_cond_for_primitive(encoding, host_type, field_null_value(field, schema), true)?;
+        return Some(method_name);
+    }
+
+    let prim = field_primitive(field, schema)?;
+    let host_type = optional_host_type(&prim)?;
+    let inner_rust = primitive_to_rust_endian(&prim, &opts.endian, field.byte_order.as_deref())?;
+    let _ = scalar_expr(&format!("self.{}", field_name), &inner_rust)?;
+    let _ = null_cond_for_primitive(&prim, host_type, field_null_value(field, schema), true)?;
+    Some(method_name)
+}
+
+fn field_view_helper_names(field: &Field, schema: &Schema, opts: &GeneratorOptions) -> Vec<String> {
+    let mut names = Vec::new();
+    if view_field_value_info(field, schema, opts).is_none() {
+        return names;
+    }
+    let fname = snake_ident(&field.name);
+    names.push(snake_with_suffix(&fname, "value"));
+    if field_is_required(field, schema) {
+        names.push(snake_with_suffix(&fname, "required"));
+    }
+    if let Some(TypeDef::Enum { values, .. }) = schema.types.get(&field.ty)
+        && !values.is_empty()
+    {
+        names.push(snake_with_suffix(&fname, "enum"));
+    }
+    for (sub_method, _) in composite_optional_view_helpers(&field.ty, schema, opts) {
+        names.push(snake_with_suffix(&fname, &sub_method));
+    }
+    if let Some(resolved) = resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+        && parse_u8_array_len(&resolved).is_some()
+    {
+        names.push(snake_with_suffix(&fname, "bytes"));
+        names.push(snake_with_suffix(&fname, "str"));
+        names.push(snake_with_suffix(&fname, "str_trimmed"));
+    }
+    names
+}
+
+fn constant_field_assoc_names(
+    field: &Field,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) -> Vec<String> {
+    if constant_field_value_expr(field, schema, opts).is_none() {
+        return Vec::new();
+    }
+    vec![const_ident(&field.name), snake_ident(&field.name)]
+}
+
+fn claim_field_impl_names(
+    scope: &mut NameScope,
+    context: &str,
+    fields: &[&Field],
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) -> Result<(), CodegenError> {
+    for field in fields {
+        if field_is_constant(field, schema) {
+            for name in constant_field_assoc_names(field, schema, opts) {
+                scope.claim(
+                    name,
+                    format!("constant field '{}' in {}", field.name, context),
+                )?;
+            }
+            continue;
+        }
+        for name in field_metadata_names(field) {
+            scope.claim(
+                name,
+                format!("metadata for field '{}' in {}", field.name, context),
+            )?;
+        }
+        if let Some(name) = field_optional_method_name(field, schema, opts) {
+            scope.claim(
+                name,
+                format!("optional helper for field '{}' in {}", field.name, context),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn claim_view_field_names(
+    scope: &mut NameScope,
+    context: &str,
+    fields: &[&Field],
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) -> Result<(), CodegenError> {
+    for field in fields {
+        let fname = snake_ident(&field.name);
+        scope.claim(
+            format!("has_{}", fname),
+            format!("presence helper for field '{}' in {}", field.name, context),
+        )?;
+        if field_is_constant(field, schema) {
+            if constant_field_value_expr(field, schema, opts).is_some() {
+                scope.claim(
+                    fname,
+                    format!("constant field accessor '{}' in {}", field.name, context),
+                )?;
+            }
+            continue;
+        }
+        if resolve_type(&field.ty, schema, opts, field.byte_order.as_deref()).is_none() {
+            continue;
+        }
+        scope.claim(
+            fname.clone(),
+            format!("field accessor '{}' in {}", field.name, context),
+        )?;
+        for name in field_view_helper_names(field, schema, opts) {
+            scope.claim(
+                name,
+                format!("view helper for field '{}' in {}", field.name, context),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn claim_group_type_names(
+    scope: &mut NameScope,
+    group: &Group,
+    context: &str,
+) -> Result<(), CodegenError> {
+    let group_name = type_ident(&group.name);
+    let entry_struct = format!("{}Entry", group_name);
+    let entry_body = format!("{}Body", entry_struct);
+    let group_desc = format!("group '{}' in {}", group.name, context);
+    for (ident, desc) in [
+        (
+            format!("{}Group", group_name),
+            format!("group view type for {}", group_desc),
+        ),
+        (
+            format!("{}Iter", group_name),
+            format!("group iterator type for {}", group_desc),
+        ),
+        (
+            entry_struct.clone(),
+            format!("group entry type for {}", group_desc),
+        ),
+        (
+            entry_body,
+            format!("group entry body type for {}", group_desc),
+        ),
+        (
+            format!("{}EntryView", group_name),
+            format!("group entry view type for {}", group_desc),
+        ),
+        (
+            format!("{}GroupBuilder", group_name),
+            format!("group builder type for {}", group_desc),
+        ),
+        (
+            format!("{}EntryBuilder", group_name),
+            format!("group entry builder type for {}", group_desc),
+        ),
+        (
+            format!("{}GroupEncoder", group_name),
+            format!("group encoder type for {}", group_desc),
+        ),
+        (
+            format!("{}EntryEncoder", group_name),
+            format!("group entry encoder type for {}", group_desc),
+        ),
+    ] {
+        scope.claim(ident, desc)?;
+    }
+    for nested in group_groups(group) {
+        claim_group_type_names(scope, nested, context)?;
+    }
+    Ok(())
+}
+
+fn claim_group_fn_names(
+    scope: &mut NameScope,
+    group: &Group,
+    context: &str,
+) -> Result<(), CodegenError> {
+    let group_snake = snake_ident(&group.name);
+    let group_desc = format!("group '{}' in {}", group.name, context);
+    for (ident, desc) in [
+        (
+            format!("parse_{}", group_snake),
+            format!("group parse fn for {}", group_desc),
+        ),
+        (
+            format!("skip_{}", group_snake),
+            format!("group skip fn for {}", group_desc),
+        ),
+        (
+            format!("parse_{}", snake_with_suffix(&group_snake, "entry_body")),
+            format!("group entry parse fn for {}", group_desc),
+        ),
+    ] {
+        scope.claim(ident, desc)?;
+    }
+    for nested in group_groups(group) {
+        claim_group_fn_names(scope, nested, context)?;
+    }
+    Ok(())
+}
+
+fn validate_types_module_identifiers(
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) -> Result<(), CodegenError> {
+    let mut type_scope = NameScope::new("types.rs type namespace");
+    let mut value_scope = NameScope::new("types.rs value namespace");
+    reserve_rust_type_names(&mut type_scope);
+
+    let used_types = collect_used_types(schema);
+    for td in schema.types.values() {
+        let name = type_def_name(td);
+        type_scope.claim(type_ident(name), format!("schema type '{}'", name))?;
+        if matches!(td, TypeDef::Enum { .. }) {
+            type_scope.claim(
+                enum_name(name),
+                format!("Rust enum helper for schema enum '{}'", name),
+            )?;
+        }
+    }
+
+    for td in schema.types.values() {
+        match td {
+            TypeDef::Primitive {
+                name,
+                length,
+                presence,
+                null_value,
+                ..
+            } => {
+                let is_constant = presence.as_deref() == Some("constant");
+                let is_optional = presence.as_deref() == Some("optional");
+                let emits_alias = if length.is_some() {
+                    true
+                } else if is_constant {
+                    used_types.contains(name)
+                } else {
+                    true
+                };
+                if is_constant && !emits_alias {
+                    value_scope.claim(
+                        type_ident(name),
+                        format!("top-level constant for primitive type '{}'", name),
+                    )?;
+                }
+                if emits_alias && !is_constant && (null_value.is_some() || is_optional) {
+                    value_scope.claim(
+                        format!("{}_NULL", const_ident(name)),
+                        format!("null constant for primitive type '{}'", name),
+                    )?;
+                }
+            }
+            TypeDef::Enum { name, values, .. } => {
+                let mut variant_scope =
+                    NameScope::new(format!("variant namespace for enum '{}'", name));
+                let mut const_scope =
+                    NameScope::new(format!("associated constant namespace for enum '{}'", name));
+                for (vname, _, _) in values {
+                    variant_scope.claim(
+                        variant_ident(vname),
+                        format!("enum variant '{}' in '{}'", vname, name),
+                    )?;
+                    const_scope.claim(
+                        const_ident(vname),
+                        format!("enum associated const '{}' in '{}'", vname, name),
+                    )?;
+                }
+            }
+            TypeDef::Set { name, choices, .. } => {
+                let mut const_scope =
+                    NameScope::new(format!("associated constant namespace for set '{}'", name));
+                for (cname, _, _) in choices {
+                    const_scope.claim(
+                        const_ident(cname),
+                        format!("set associated const '{}' in '{}'", cname, name),
+                    )?;
+                }
+            }
+            TypeDef::Composite { name, fields, .. } => {
+                let mut field_scope =
+                    NameScope::new(format!("field namespace for composite '{}'", name));
+                let mut assoc_scope = NameScope::new(format!(
+                    "associated item namespace for composite '{}'",
+                    name
+                ));
+                assoc_scope.reserve("parse_prefix", "generated parse_prefix method");
+                for field in fields {
+                    match field {
+                        CompositeField::Type {
+                            name: field_name,
+                            primitive,
+                            length,
+                            presence,
+                            null_value,
+                            constant,
+                            ..
+                        } => {
+                            if presence.as_deref() == Some("constant") {
+                                if constant.is_some() {
+                                    assoc_scope.claim(
+                                        const_ident(field_name),
+                                        format!(
+                                            "constant composite field '{}' in '{}'",
+                                            field_name, name
+                                        ),
+                                    )?;
+                                }
+                                continue;
+                            }
+                            field_scope.claim(
+                                snake_ident(field_name),
+                                format!("composite field '{}' in '{}'", field_name, name),
+                            )?;
+                            let should_emit_null = null_value.is_some()
+                                || (presence.as_deref() == Some("optional") && length.is_none());
+                            if should_emit_null && primitive_to_rust(primitive, opts).is_some() {
+                                assoc_scope.claim(
+                                    format!("{}_NULL", const_ident(field_name)),
+                                    format!(
+                                        "null constant for composite field '{}' in '{}'",
+                                        field_name, name
+                                    ),
+                                )?;
+                            }
+                            if let Some(method_name) = match presence.as_deref() {
+                                Some("constant") => None,
+                                _ => {
+                                    let is_optional = match presence.as_deref() {
+                                        Some("optional") => true,
+                                        Some("required") => false,
+                                        _ => null_value.is_some(),
+                                    };
+                                    if is_optional
+                                        && length.map(|len| len <= 1).unwrap_or(true)
+                                        && optional_host_type(primitive).is_some()
+                                        && null_cond_for_primitive(
+                                            primitive,
+                                            optional_host_type(primitive).unwrap_or("u8"),
+                                            null_value.as_deref(),
+                                            true,
+                                        )
+                                        .is_some()
+                                    {
+                                        Some(snake_with_suffix(&snake_ident(field_name), "opt"))
+                                    } else {
+                                        None
+                                    }
+                                }
+                            } {
+                                assoc_scope.claim(
+                                    method_name,
+                                    format!(
+                                        "optional helper for composite field '{}' in '{}'",
+                                        field_name, name
+                                    ),
+                                )?;
+                            }
+                        }
+                        CompositeField::Ref {
+                            name: field_name,
+                            ty,
+                        } => {
+                            field_scope.claim(
+                                snake_ident(field_name),
+                                format!("composite field '{}' in '{}'", field_name, name),
+                            )?;
+                            if let Some(TypeDef::Primitive {
+                                primitive,
+                                length,
+                                presence,
+                                null_value,
+                                ..
+                            }) = schema.types.get(ty)
+                            {
+                                let should_emit_null = null_value.is_some()
+                                    || (presence.as_deref() == Some("optional")
+                                        && length.is_none());
+                                if should_emit_null && primitive_to_rust(primitive, opts).is_some()
+                                {
+                                    assoc_scope.claim(
+                                        format!("{}_NULL", const_ident(field_name)),
+                                        format!(
+                                            "null constant for composite field '{}' in '{}'",
+                                            field_name, name
+                                        ),
+                                    )?;
+                                }
+                            }
+                            if type_is_optional(ty, schema)
+                                && type_length(ty, schema).map(|len| len <= 1).unwrap_or(true)
+                                && type_primitive(ty, schema)
+                                    .and_then(optional_host_type)
+                                    .is_some()
+                            {
+                                assoc_scope.claim(
+                                    snake_with_suffix(&snake_ident(field_name), "opt"),
+                                    format!(
+                                        "optional helper for composite field '{}' in '{}'",
+                                        field_name, name
+                                    ),
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_mod_rs_identifiers(schema: &Schema) -> Result<(), CodegenError> {
+    let mut module_scope = NameScope::new("mod.rs module namespace");
+    module_scope.reserve("types", "generated types module");
+    module_scope.reserve("message_header", "generated message header module");
+
+    let mut export_scope = NameScope::new("mod.rs re-export type namespace");
+    export_scope.reserve("MessageHeader", "generated message header type");
+
+    for msg in &schema.messages {
+        module_scope.claim(
+            snake_ident(&msg.name),
+            format!("message module for '{}'", msg.name),
+        )?;
+        let msg_ty = type_ident(&msg.name);
+        export_scope.claim(msg_ty.clone(), format!("message type for '{}'", msg.name))?;
+        export_scope.claim(
+            format!("{}Builder", msg_ty),
+            format!("message builder type for '{}'", msg.name),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn validate_group_identifiers(
+    group: &Group,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+    context: &str,
+) -> Result<(), CodegenError> {
+    let group_context = format!("group '{}' in {}", group.name, context);
+    let fields = group_fields(group);
+    let nested_groups = group_groups(group);
+    let data_fields = group_data(group);
+
+    let mut entry_struct_scope =
+        NameScope::new(format!("entry field namespace for {}", group_context));
+    claim_struct_field_names(
+        &mut entry_struct_scope,
+        &group_context,
+        &fields,
+        schema,
+        opts,
+    )?;
+
+    let mut entry_impl_scope = NameScope::new(format!(
+        "entry associated item namespace for {}",
+        group_context
+    ));
+    entry_impl_scope.reserve("parse_prefix", "generated parse_prefix method");
+    claim_field_impl_names(&mut entry_impl_scope, &group_context, &fields, schema, opts)?;
+
+    let mut entry_view_scope =
+        NameScope::new(format!("entry view namespace for {}", group_context));
+    claim_view_field_names(&mut entry_view_scope, &group_context, &fields, schema, opts)?;
+
+    let mut entry_view_field_scope =
+        NameScope::new(format!("entry view field namespace for {}", group_context));
+    entry_view_field_scope.reserve("body", "generated entry body field");
+    entry_view_field_scope.reserve("acting_block_length", "generated acting block length field");
+    for nested in &nested_groups {
+        entry_view_field_scope.claim(
+            snake_ident(&nested.name),
+            format!("nested group field '{}' in {}", nested.name, group_context),
+        )?;
+    }
+    for data in &data_fields {
+        entry_view_field_scope.claim(
+            snake_ident(&data.name),
+            format!("var-data field '{}' in {}", data.name, group_context),
+        )?;
+    }
+
+    let mut group_scope = NameScope::new(format!(
+        "group associated item namespace for {}",
+        group_context
+    ));
+    for (ident, desc) in [
+        ("count".to_string(), "generated count method".to_string()),
+        ("iter".to_string(), "generated iter method".to_string()),
+        (
+            "SINCE_VERSION".to_string(),
+            "generated since-version const".to_string(),
+        ),
+        (
+            "SEMANTIC_TYPE".to_string(),
+            "generated semantic-type const".to_string(),
+        ),
+    ] {
+        group_scope.claim(ident, desc)?;
+    }
+
+    let mut builder_scope =
+        NameScope::new(format!("entry builder namespace for {}", group_context));
+    for field in &fields {
+        if field_is_constant(field, schema) {
+            continue;
+        }
+        builder_scope.claim(
+            snake_ident(&field.name),
+            format!("field setter '{}' in {}", field.name, group_context),
+        )?;
+    }
+    for nested in &nested_groups {
+        builder_scope.claim(
+            snake_ident(&nested.name),
+            format!(
+                "nested group builder '{}' in {}",
+                nested.name, group_context
+            ),
+        )?;
+    }
+    for data in &data_fields {
+        builder_scope.claim(
+            snake_ident(&data.name),
+            format!("var-data builder '{}' in {}", data.name, group_context),
+        )?;
+    }
+
+    let mut encoder_scope =
+        NameScope::new(format!("entry encoder namespace for {}", group_context));
+    for field in &fields {
+        if field_is_constant(field, schema) {
+            continue;
+        }
+        encoder_scope.claim(
+            snake_ident(&field.name),
+            format!("field encoder '{}' in {}", field.name, group_context),
+        )?;
+    }
+    for nested in &nested_groups {
+        encoder_scope.claim(
+            snake_ident(&nested.name),
+            format!(
+                "nested group encoder '{}' in {}",
+                nested.name, group_context
+            ),
+        )?;
+    }
+    for data in &data_fields {
+        encoder_scope.claim(
+            snake_ident(&data.name),
+            format!("var-data encoder '{}' in {}", data.name, group_context),
+        )?;
+    }
+
+    for nested in nested_groups {
+        validate_group_identifiers(nested, schema, opts, &group_context)?;
+    }
+
+    Ok(())
+}
+
+fn validate_message_identifiers(
+    msg: &Message,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) -> Result<(), CodegenError> {
+    let context = format!("message '{}'", msg.name);
+    let fields = message_fields(msg);
+    let groups = message_groups(msg);
+    let data_fields = message_data(msg);
+    let has_group_data = groups.iter().any(|g| group_has_var_data(g));
+    let has_var_data = has_group_data || !data_fields.is_empty();
+    let has_fixed_string_helpers = fields.iter().any(|field| {
+        if field_is_constant(field, schema) {
+            return false;
+        }
+        resolve_type(&field.ty, schema, opts, field.byte_order.as_deref())
+            .as_deref()
+            .and_then(parse_u8_array_len)
+            .is_some()
+    });
+
+    let mut type_scope = NameScope::new(format!("type namespace for {}", context));
+    reserve_rust_type_names(&mut type_scope);
+    type_scope.reserve("MessageHeader", "imported message header type");
+    type_scope.reserve("EncodeIntoError", "generated encode-into error type");
+    type_scope.reserve("DecodeFieldError", "generated decode error type");
+    type_scope.reserve("EncodeError", "generated encode error type");
+    if has_var_data {
+        type_scope.reserve("VarData", "generated var-data helper type");
+        type_scope.reserve("LengthKind", "generated length helper type");
+    }
+    let msg_ty = type_ident(&msg.name);
+    for (ident, desc) in [
+        (msg_ty.clone(), "message type".to_string()),
+        (
+            format!("{}Builder", msg_ty),
+            "message builder type".to_string(),
+        ),
+        (
+            format!("{}Encoder", msg_ty),
+            "message encoder type".to_string(),
+        ),
+        (format!("{}Body", msg_ty), "message body type".to_string()),
+        (
+            type_with_suffix(&msg.name, "View"),
+            "message view type".to_string(),
+        ),
+    ] {
+        type_scope.claim(ident, format!("{} for {}", desc, context))?;
+    }
+    for group in &groups {
+        claim_group_type_names(&mut type_scope, group, &context)?;
+    }
+
+    let mut value_scope = NameScope::new(format!("value namespace for {}", context));
+    for (ident, desc) in [
+        ("ENDIAN".to_string(), "generated endian const".to_string()),
+        (
+            "ensure_len".to_string(),
+            "generated buffer helper".to_string(),
+        ),
+        (
+            "write_bytes_at".to_string(),
+            "generated write helper".to_string(),
+        ),
+        (
+            "write_bytes_into".to_string(),
+            "generated write-into helper".to_string(),
+        ),
+        (
+            "write_bytes_into_in_bounds".to_string(),
+            "generated in-bounds write helper".to_string(),
+        ),
+        (
+            "parse_with_header".to_string(),
+            "generated message parse helper".to_string(),
+        ),
+    ] {
+        value_scope.claim(ident, desc)?;
+    }
+    if has_var_data {
+        for (ident, desc) in [
+            (
+                "length_max".to_string(),
+                "generated length helper".to_string(),
+            ),
+            (
+                "read_length".to_string(),
+                "generated length reader".to_string(),
+            ),
+            (
+                "parse_var_data".to_string(),
+                "generated var-data parser".to_string(),
+            ),
+            (
+                "write_length".to_string(),
+                "generated length writer".to_string(),
+            ),
+            (
+                "write_var_data".to_string(),
+                "generated var-data writer".to_string(),
+            ),
+            (
+                "write_length_into".to_string(),
+                "generated in-place length writer".to_string(),
+            ),
+            (
+                "write_var_data_into".to_string(),
+                "generated in-place var-data writer".to_string(),
+            ),
+        ] {
+            value_scope.claim(ident, desc)?;
+        }
+    }
+    if has_fixed_string_helpers {
+        value_scope.claim(
+            "trim_ascii_space_and_nul_right".to_string(),
+            "generated string trimming helper".to_string(),
+        )?;
+    }
+    for group in &groups {
+        claim_group_fn_names(&mut value_scope, group, &context)?;
+    }
+
+    let mut struct_scope = NameScope::new(format!("struct field namespace for {}", context));
+    claim_struct_field_names(&mut struct_scope, &context, &fields, schema, opts)?;
+
+    let mut impl_scope =
+        NameScope::new(format!("message associated item namespace for {}", context));
+    for (ident, desc) in [
+        (
+            "parse_prefix".to_string(),
+            "generated parse_prefix method".to_string(),
+        ),
+        (
+            "BLOCK_LENGTH".to_string(),
+            "generated block length const".to_string(),
+        ),
+        (
+            "TEMPLATE_ID".to_string(),
+            "generated template id const".to_string(),
+        ),
+        (
+            "SCHEMA_ID".to_string(),
+            "generated schema id const".to_string(),
+        ),
+        (
+            "SCHEMA_VERSION".to_string(),
+            "generated schema version const".to_string(),
+        ),
+        (
+            "SINCE_VERSION".to_string(),
+            "generated since-version const".to_string(),
+        ),
+        (
+            "SEMANTIC_TYPE".to_string(),
+            "generated semantic-type const".to_string(),
+        ),
+    ] {
+        impl_scope.claim(ident, desc)?;
+    }
+    claim_field_impl_names(&mut impl_scope, &context, &fields, schema, opts)?;
+    for data in &data_fields {
+        impl_scope.claim(
+            format!("parse_{}", snake_ident(&data.name)),
+            format!("var-data parser '{}' in {}", data.name, context),
+        )?;
+    }
+
+    let mut builder_scope = NameScope::new(format!("builder namespace for {}", context));
+    for ident in ["new", "with_capacity", "finish", "finish_with_header"] {
+        builder_scope.reserve(ident, "generated builder method");
+    }
+    for field in &fields {
+        if field_is_constant(field, schema) {
+            continue;
+        }
+        builder_scope.claim(
+            snake_ident(&field.name),
+            format!("field setter '{}' in {}", field.name, context),
+        )?;
+    }
+    for group in &groups {
+        builder_scope.claim(
+            snake_ident(&group.name),
+            format!("group builder '{}' in {}", group.name, context),
+        )?;
+    }
+    for data in &data_fields {
+        builder_scope.claim(
+            snake_ident(&data.name),
+            format!("var-data builder '{}' in {}", data.name, context),
+        )?;
+    }
+
+    let mut encoder_scope = NameScope::new(format!("encoder namespace for {}", context));
+    for ident in ["new", "encoded_len", "as_slice", "finish"] {
+        encoder_scope.reserve(ident, "generated encoder method");
+    }
+    for field in &fields {
+        if field_is_constant(field, schema) {
+            continue;
+        }
+        encoder_scope.claim(
+            snake_ident(&field.name),
+            format!("field encoder '{}' in {}", field.name, context),
+        )?;
+    }
+    for group in &groups {
+        encoder_scope.claim(
+            snake_ident(&group.name),
+            format!("group encoder '{}' in {}", group.name, context),
+        )?;
+    }
+    for data in &data_fields {
+        encoder_scope.claim(
+            snake_ident(&data.name),
+            format!("var-data encoder '{}' in {}", data.name, context),
+        )?;
+    }
+
+    let mut view_scope = NameScope::new(format!("view namespace for {}", context));
+    view_scope.claim(
+        "is_fixed_layout".to_string(),
+        "generated fixed-layout helper".to_string(),
+    )?;
+    claim_view_field_names(&mut view_scope, &context, &fields, schema, opts)?;
+    for data in &data_fields {
+        view_scope.claim(
+            format!("parse_{}", snake_ident(&data.name)),
+            format!("var-data parser '{}' in {}", data.name, context),
+        )?;
+    }
+
+    for group in &groups {
+        validate_group_identifiers(group, schema, opts, &context)?;
+    }
+
+    Ok(())
+}
+
+fn validate_schema_identifiers(
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) -> Result<(), CodegenError> {
+    validate_types_module_identifiers(schema, opts)?;
+    validate_mod_rs_identifiers(schema)?;
+    for msg in &schema.messages {
+        validate_message_identifiers(msg, schema, opts)?;
+    }
+    Ok(())
+}
+
 /// Generate a collection of `(filename, contents)` tuples for the
 /// supplied schema.
 pub fn generate(
@@ -558,6 +1544,7 @@ pub fn generate(
     opts: &GeneratorOptions,
 ) -> Result<Vec<(String, String)>, CodegenError> {
     validate_schema_types(schema, opts)?;
+    validate_schema_identifiers(schema, opts)?;
     let mut files = Vec::new();
     // always emit a types module
     let types_code = generate_types(schema, opts);
@@ -663,17 +1650,16 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                     has_alias = true;
                 } else if presence.as_deref() == Some("constant") {
                     if used_types.contains(name) {
-                        let alias = opts
-                            .constant_type_aliases
-                            .get(name)
-                            .cloned()
-                            .or_else(|| constant_type_alias_from_schema(name, schema))
-                            .unwrap_or_else(|| rust_type.clone());
-                        code.push_str(&format!(
-                            "pub type {} = {};\n",
-                            type_name,
-                            type_ident(&alias)
-                        ));
+                        let alias = if let Some(path) = opts.constant_type_aliases.get(name) {
+                            path.clone()
+                        } else if let Some(schema_ty) =
+                            constant_type_alias_from_schema(name, schema)
+                        {
+                            type_ident(&schema_ty)
+                        } else {
+                            rust_type.clone()
+                        };
+                        code.push_str(&format!("pub type {} = {};\n", type_name, alias));
                         has_alias = true;
                     } else if let Some(value) = constant {
                         if let Some(expr) = const_scalar_expr(primitive, &rust_type, value) {
@@ -2757,7 +3743,7 @@ fn constant_field_value_expr(
         && let Some((type_name, variant)) = value_ref.split_once('.')
     {
         let type_name = type_ident(type_name);
-        let variant = variant_ident(variant);
+        let variant = const_ident(variant);
         return Some((type_name.clone(), format!("{type_name}::{variant}")));
     }
 

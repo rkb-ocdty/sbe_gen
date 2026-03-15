@@ -71,6 +71,39 @@ fn rejects_unsupported_var_data_length_types() {
 }
 
 #[test]
+fn rejects_message_name_collisions_after_sanitization() {
+    let xml = r#"
+        <messageSchema package="test">
+            <message name="type" id="1"/>
+            <message name="type_" id="2"/>
+        </messageSchema>
+    "#;
+
+    let err = generate(xml, &GeneratorOptions::default()).expect_err("colliding names must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("identifier collision"));
+    assert!(msg.contains("type_'"));
+}
+
+#[test]
+fn rejects_view_helper_collisions_after_sanitization() {
+    let xml = r#"
+        <messageSchema package="test">
+            <message name="Collision" id="1" blockLength="8">
+                <field name="qty" id="1" type="uint32" offset="0"/>
+                <field name="qty_value" id="2" type="uint32" offset="4"/>
+            </message>
+        </messageSchema>
+    "#;
+
+    let err = generate(xml, &GeneratorOptions::default()).expect_err("helper collision must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("identifier collision"));
+    assert!(msg.contains("qty"));
+    assert!(msg.contains("qty_value"));
+}
+
+#[test]
 fn generates_groups_and_var_data() {
     let xml = r#"
         <messageSchema package="test">
@@ -191,6 +224,50 @@ fn generates_nested_groups() {
     assert!(outer_rs.contains("ParentsEntryView"));
     assert!(outer_rs.contains("pub children: ChildrenGroup"));
     assert!(outer_rs.contains("SINCE_VERSION"));
+}
+
+#[test]
+fn value_ref_constants_use_generated_enum_constant_names() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <enum name="Side" encodingType="char">
+                    <validValue name="Buy">B</validValue>
+                    <validValue name="Sell">S</validValue>
+                </enum>
+            </types>
+            <message name="Order" id="1" blockLength="0">
+                <field name="ConstSide" id="1" type="Side" valueRef="Side.Buy"/>
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let order_rs = module_map.get("order.rs").expect("order.rs emitted");
+    assert!(order_rs.contains("pub const CONST_SIDE: Side = Side::BUY;"));
+}
+
+#[test]
+fn constant_type_alias_paths_are_emitted_verbatim() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <type name="FooConst" primitiveType="uint8" presence="constant">7</type>
+            </types>
+            <message name="Order" id="1" blockLength="0">
+                <field name="foo" id="1" type="FooConst"/>
+            </message>
+        </messageSchema>
+    "#;
+
+    let mut opts = GeneratorOptions::default();
+    opts.constant_type_aliases
+        .insert("FooConst".into(), "crate::ext::Type".into());
+    let modules = generate(xml, &opts).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let types_rs = module_map.get("types.rs").expect("types.rs emitted");
+    assert!(types_rs.contains("pub type FooConst = crate::ext::Type;"));
 }
 
 #[test]
