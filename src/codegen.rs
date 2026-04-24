@@ -553,6 +553,7 @@ fn validate_type_reference(
                     CompositeField::Ref {
                         name: field_name,
                         ty: ref_ty,
+                        ..
                     } => {
                         let ref_scope =
                             format!("{} via composite '{}' field '{}'", scope, name, field_name);
@@ -1068,6 +1069,7 @@ fn validate_types_module_identifiers(
                         CompositeField::Ref {
                             name: field_name,
                             ty,
+                            ..
                         } => {
                             field_scope.claim(
                                 snake_ident(field_name),
@@ -1112,6 +1114,7 @@ fn validate_types_module_identifiers(
                         }
                     }
                 }
+                validate_composite_layout(name, fields, schema, opts)?;
             }
         }
     }
@@ -1873,12 +1876,15 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                 );
                 code.push_str(&format!("pub struct {} {{\n", composite_ty));
                 let mut const_fields = Vec::new();
+                let mut cur_offset: Option<usize> = Some(0);
+                let mut pad_idx = 0usize;
                 for f in fields {
                     match f {
                         CompositeField::Type {
                             name: fname,
                             primitive,
                             length,
+                            offset,
                             presence,
                             constant,
                             description,
@@ -1894,6 +1900,18 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                                     ));
                                 }
                                 continue;
+                            }
+                            let field_offset = offset.map(|o| o as usize);
+                            if let (Some(target), Some(cur)) = (field_offset, cur_offset)
+                                && target > cur
+                            {
+                                let pad = target - cur;
+                                code.push_str(&format!(
+                                    "    __padding{}: [u8; {}],\n",
+                                    pad_idx, pad
+                                ));
+                                pad_idx += 1;
+                                cur_offset = Some(target);
                             }
                             if let Some(rust_type) = primitive_to_rust(primitive, opts) {
                                 if let Some(len) = length {
@@ -1912,14 +1930,44 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                                         rust_type
                                     ));
                                 }
+                                if let Some(sz) = composite_field_size(f, schema, opts, 0, true) {
+                                    if let Some(cur) = cur_offset {
+                                        cur_offset = Some(cur + sz);
+                                    }
+                                } else {
+                                    cur_offset = None;
+                                }
                             }
                         }
-                        CompositeField::Ref { name: fname, ty } => {
+                        CompositeField::Ref {
+                            name: fname,
+                            ty,
+                            offset,
+                        } => {
+                            let field_offset = offset.map(|o| o as usize);
+                            if let (Some(target), Some(cur)) = (field_offset, cur_offset)
+                                && target > cur
+                            {
+                                let pad = target - cur;
+                                code.push_str(&format!(
+                                    "    __padding{}: [u8; {}],\n",
+                                    pad_idx, pad
+                                ));
+                                pad_idx += 1;
+                                cur_offset = Some(target);
+                            }
                             code.push_str(&format!(
                                 "    pub {}: {},\n",
                                 snake_ident(fname),
                                 type_ident(ty)
                             ));
+                            if let Some(sz) = composite_field_size(f, schema, opts, 0, true) {
+                                if let Some(cur) = cur_offset {
+                                    cur_offset = Some(cur + sz);
+                                }
+                            } else {
+                                cur_offset = None;
+                            }
                         }
                     }
                 }
@@ -2717,6 +2765,40 @@ fn primitive_size_bytes(prim: &str) -> Option<usize> {
     }
 }
 
+fn composite_field_offset_value(field: &CompositeField) -> Option<usize> {
+    match field {
+        CompositeField::Type { offset, .. } | CompositeField::Ref { offset, .. } => {
+            offset.map(|o| o as usize)
+        }
+    }
+}
+
+fn composite_field_size(
+    field: &CompositeField,
+    schema: &Schema,
+    opts: &GeneratorOptions,
+    depth: usize,
+    respect_constant: bool,
+) -> Option<usize> {
+    match field {
+        CompositeField::Type {
+            primitive,
+            length,
+            presence,
+            ..
+        } => {
+            if respect_constant && presence.as_deref() == Some("constant") {
+                return Some(0);
+            }
+            let base = primitive_size_bytes(primitive)?;
+            Some(base * length.unwrap_or(1))
+        }
+        CompositeField::Ref { ty, .. } => {
+            type_size_bytes(ty, schema, opts, depth + 1, respect_constant)
+        }
+    }
+}
+
 fn type_size_bytes(
     ty: &str,
     schema: &Schema,
@@ -2750,24 +2832,9 @@ fn type_size_bytes(
             TypeDef::Composite { fields, .. } => {
                 let mut total = 0usize;
                 for f in fields {
-                    match f {
-                        CompositeField::Type {
-                            primitive,
-                            length,
-                            presence,
-                            ..
-                        } => {
-                            if presence.as_deref() == Some("constant") {
-                                continue;
-                            }
-                            let base = primitive_size_bytes(primitive)?;
-                            total += base * length.unwrap_or(1);
-                        }
-                        CompositeField::Ref { ty, .. } => {
-                            total +=
-                                type_size_bytes(ty, schema, _opts, depth + 1, respect_constant)?;
-                        }
-                    }
+                    let start = composite_field_offset_value(f).unwrap_or(total);
+                    let size = composite_field_size(f, schema, _opts, depth, respect_constant)?;
+                    total = start.checked_add(size)?;
                 }
                 Some(total)
             }
@@ -3619,7 +3686,7 @@ fn dimension_fields(
                 }
                 dim_fields.push((snake_ident(name), rust));
             }
-            CompositeField::Ref { name, ty } => {
+            CompositeField::Ref { name, ty, .. } => {
                 let Some(rust) = dimension_field_rust_type(ty, schema, opts) else {
                     return Err(CodegenError::InvalidSchema(format!(
                         "dimensionType '{}' field '{}' in {} must resolve to an integer type",
@@ -4247,7 +4314,7 @@ fn composite_optional_view_helpers(
                     host_ty.to_string(),
                 ));
             }
-            CompositeField::Ref { name, ty } => {
+            CompositeField::Ref { name, ty, .. } => {
                 if !type_is_optional(ty, schema) {
                     continue;
                 }
@@ -4539,7 +4606,7 @@ fn optional_methods_for_composite_fields(
                     cond = cond,
                 ));
             }
-            CompositeField::Ref { name, ty } => {
+            CompositeField::Ref { name, ty, .. } => {
                 if !type_is_optional(ty, schema) {
                     continue;
                 }
@@ -4640,7 +4707,7 @@ fn composite_null_constants(
                     ));
                 }
             }
-            CompositeField::Ref { name, ty } => {
+            CompositeField::Ref { name, ty, .. } => {
                 let (prim, length, presence, null_value) = if let Some(TypeDef::Primitive {
                     primitive,
                     length,
@@ -4780,36 +4847,69 @@ fn composite_field_offset(
     if let Some(TypeDef::Composite { fields, .. }) = schema.types.get(ty) {
         let mut cur = 0usize;
         for f in fields {
+            let start = composite_field_offset_value(f).unwrap_or(cur);
             match f {
-                CompositeField::Type {
-                    name,
-                    primitive,
-                    length,
-                    presence,
-                    ..
-                } => {
+                CompositeField::Type { name, .. } => {
                     if snake_ident(name) == target {
-                        return Some(cur);
-                    }
-                    if presence.as_deref() == Some("constant") {
-                        continue;
-                    }
-                    if let Some(sz) = primitive_size_bytes(primitive) {
-                        cur += sz * length.unwrap_or(1);
-                    } else {
-                        return None;
+                        return Some(start);
                     }
                 }
-                CompositeField::Ref { name, ty } => {
+                CompositeField::Ref { name, .. } => {
                     if snake_ident(name) == target {
-                        return Some(cur);
+                        return Some(start);
                     }
-                    cur += type_size_bytes(ty, schema, opts, 0, true)?;
                 }
             }
+            let size = composite_field_size(f, schema, opts, 0, true)?;
+            cur = start.checked_add(size)?;
         }
     }
     None
+}
+
+fn validate_composite_layout(
+    name: &str,
+    fields: &[CompositeField],
+    schema: &Schema,
+    opts: &GeneratorOptions,
+) -> Result<(), CodegenError> {
+    let mut cur = 0usize;
+    for field in fields {
+        if matches!(
+            field,
+            CompositeField::Type {
+                presence: Some(p),
+                ..
+            } if p == "constant"
+        ) {
+            continue;
+        }
+
+        let start = composite_field_offset_value(field).unwrap_or(cur);
+        let field_name = match field {
+            CompositeField::Type { name, .. } | CompositeField::Ref { name, .. } => name,
+        };
+        if start < cur {
+            return Err(CodegenError::InvalidSchema(format!(
+                "composite '{}' field '{}' starts at {} but previous layout ends at {}",
+                name, field_name, start, cur
+            )));
+        }
+
+        let size = composite_field_size(field, schema, opts, 0, true).ok_or_else(|| {
+            CodegenError::InvalidSchema(format!(
+                "composite '{}' field '{}' has unsupported layout",
+                name, field_name
+            ))
+        })?;
+        cur = start.checked_add(size).ok_or_else(|| {
+            CodegenError::InvalidSchema(format!(
+                "composite '{}' layout overflows while processing field '{}'",
+                name, field_name
+            ))
+        })?;
+    }
+    Ok(())
 }
 
 fn builder_param_type(resolved_type: &str) -> String {
@@ -4937,5 +5037,118 @@ fn raw_expr_for_value(
         scalar_expr(&format!("{}.0", val_ident), &inner_rust)
     } else {
         Some(val_ident.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn composite_field_offset_respects_declared_offsets() {
+        let schema = Schema {
+            package: None,
+            schema_id: None,
+            version: None,
+            types: HashMap::from([(
+                "groupSize8Byte".to_string(),
+                TypeDef::Composite {
+                    name: "groupSize8Byte".to_string(),
+                    description: None,
+                    fields: vec![
+                        CompositeField::Type {
+                            name: "blockLength".to_string(),
+                            primitive: "uint16".to_string(),
+                            length: None,
+                            offset: None,
+                            presence: None,
+                            null_value: None,
+                            constant: None,
+                            description: None,
+                        },
+                        CompositeField::Type {
+                            name: "numInGroup".to_string(),
+                            primitive: "uint8".to_string(),
+                            length: None,
+                            offset: Some(7),
+                            presence: None,
+                            null_value: None,
+                            constant: None,
+                            description: None,
+                        },
+                    ],
+                },
+            )]),
+            messages: Vec::new(),
+        };
+        let opts = GeneratorOptions::default();
+
+        assert_eq!(
+            composite_field_offset("groupSize8Byte", "blockLength", &schema, &opts),
+            Some(0)
+        );
+        assert_eq!(
+            composite_field_offset("groupSize8Byte", "numInGroup", &schema, &opts),
+            Some(7)
+        );
+        assert_eq!(
+            type_size_bytes("groupSize8Byte", &schema, &opts, 0, true),
+            Some(8)
+        );
+    }
+
+    #[test]
+    fn composite_field_offset_respects_ref_offsets() {
+        let schema = Schema {
+            package: None,
+            schema_id: None,
+            version: None,
+            types: HashMap::from([
+                (
+                    "CountType".to_string(),
+                    TypeDef::Primitive {
+                        name: "CountType".to_string(),
+                        primitive: "uint16".to_string(),
+                        length: None,
+                        presence: None,
+                        null_value: None,
+                        constant: None,
+                        description: None,
+                    },
+                ),
+                (
+                    "Outer".to_string(),
+                    TypeDef::Composite {
+                        name: "Outer".to_string(),
+                        description: None,
+                        fields: vec![
+                            CompositeField::Type {
+                                name: "blockLength".to_string(),
+                                primitive: "uint16".to_string(),
+                                length: None,
+                                offset: None,
+                                presence: None,
+                                null_value: None,
+                                constant: None,
+                                description: None,
+                            },
+                            CompositeField::Ref {
+                                name: "count".to_string(),
+                                ty: "CountType".to_string(),
+                                offset: Some(7),
+                            },
+                        ],
+                    },
+                ),
+            ]),
+            messages: Vec::new(),
+        };
+        let opts = GeneratorOptions::default();
+
+        assert_eq!(
+            composite_field_offset("Outer", "count", &schema, &opts),
+            Some(7)
+        );
+        assert_eq!(type_size_bytes("Outer", &schema, &opts, 0, true), Some(9));
     }
 }

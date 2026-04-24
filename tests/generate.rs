@@ -207,6 +207,63 @@ fn generates_groups_and_var_data() {
 }
 
 #[test]
+fn generates_8_byte_aligned_group_size_composites() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <composite name="groupSize8Byte">
+                    <type name="blockLength" primitiveType="uint16"/>
+                    <type name="numInGroup" primitiveType="uint8" offset="7"/>
+                </composite>
+            </types>
+            <message name="Counted" id="1" blockLength="0">
+                <group name="Items" id="2" blockLength="1" dimensionType="groupSize8Byte">
+                    <field name="x" id="1" type="uint8" />
+                </group>
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let types_rs = module_map.get("types.rs").expect("types.rs emitted");
+    let counted_rs = module_map.get("counted.rs").expect("counted.rs emitted");
+
+    assert!(types_rs.contains("pub struct groupSize8Byte"));
+    assert!(types_rs.contains("__padding0: [u8; 5]"));
+    assert!(types_rs.contains("pub num_in_group: u8"));
+    assert!(counted_rs.contains("HEADER_SIZE: usize = 8"));
+    assert!(counted_rs.contains("write_bytes_into(buf, cursor + 7, &count)"));
+    assert!(counted_rs.contains("pub header: &'a crate::types::groupSize8Byte"));
+    assert!(counted_rs.contains("crate::types::groupSize8Byte::parse_prefix(buf)?;"));
+}
+
+#[test]
+fn rejects_overlapping_composite_offsets() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <composite name="BadLayout">
+                    <type name="blockLength" primitiveType="uint16"/>
+                    <type name="numInGroup" primitiveType="uint8" offset="1"/>
+                </composite>
+            </types>
+            <message name="Counted" id="1" blockLength="0">
+                <group name="Items" id="2" blockLength="1" dimensionType="BadLayout">
+                    <field name="x" id="1" type="uint8" />
+                </group>
+            </message>
+        </messageSchema>
+    "#;
+
+    let err = generate(xml, &GeneratorOptions::default()).expect_err("invalid layout must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("composite 'BadLayout'"));
+    assert!(msg.contains("starts at 1"));
+    assert!(msg.contains("previous layout ends at 2"));
+}
+
+#[test]
 fn var_data_length_composite_refs_are_supported() {
     let xml = r#"
         <messageSchema package="test">

@@ -75,6 +75,7 @@ pub enum CompositeField {
         name: String,
         primitive: String,
         length: Option<usize>,
+        offset: Option<u32>,
         #[allow(dead_code)]
         presence: Option<String>,
         #[allow(dead_code)]
@@ -85,7 +86,11 @@ pub enum CompositeField {
         description: Option<String>,
     },
     /// A reference to a previously defined type.
-    Ref { name: String, ty: String },
+    Ref {
+        name: String,
+        ty: String,
+        offset: Option<u32>,
+    },
 }
 
 /// A message defined in the schema.
@@ -357,6 +362,7 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                         let length = f_node
                                             .attribute("length")
                                             .and_then(|s| s.parse::<usize>().ok());
+                                        let offset = attr_opt_u32(&f_node, "offset", &fname)?;
                                         let presence =
                                             f_node.attribute("presence").map(|s| s.to_string());
                                         let null_value =
@@ -366,6 +372,7 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                             name: fname,
                                             primitive: primitive.to_string(),
                                             length,
+                                            offset,
                                             presence,
                                             null_value,
                                             constant,
@@ -381,9 +388,11 @@ fn parse_schema_from_node(node: roxmltree::Node) -> Result<Schema, ParseError> {
                                             &format!("composite ref in {}", name),
                                         )?;
                                         let ty = attr_req(&f_node, "type", &fname)?;
+                                        let offset = attr_opt_u32(&f_node, "offset", &fname)?;
                                         fields.push(CompositeField::Ref {
                                             name: fname,
                                             ty: ty.to_string(),
+                                            offset,
                                         });
                                     }
                                     _ => {}
