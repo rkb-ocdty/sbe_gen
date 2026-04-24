@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.7.1
+
+### Changed
+- Fixed composite offset handling in repeating-group dimension types, including `groupSize8Byte` layouts with explicit padding offsets.
 
 ## 0.7.0
 
