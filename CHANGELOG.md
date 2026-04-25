@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.2
+
+### Fixed
+- Generated message and group modules now reference schema-defined helper types
+  via `super::types::...` and `super::message_header::...` instead of
+  `crate::types::...` / `crate::message_header::...`. The previous absolute
+  paths only resolved when the consumer crate happened to expose `types` and
+  `message_header` at the crate root, which broke multi-schema layouts where
+  each schema sits in its own submodule (e.g.
+  `crate::generated::<schema>::types`). Relative `super::` paths resolve
+  correctly in both single-schema and multi-schema crates without changing the
+  collision-avoidance properties introduced in 0.7.0.
+- Closures over message accessors (e.g. `field().and_then(|v| v.mantissa_opt())`)
+  no longer hit `E0282` type-inference errors caused by unresolvable
+  `crate::types::T` paths in multi-schema consumers.
+
 ## 0.7.1
 
 ### Changed

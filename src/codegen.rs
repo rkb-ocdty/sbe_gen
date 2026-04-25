@@ -2322,7 +2322,7 @@ fn generate_message(
     }
     code.push_str("    pub fn finish(self) -> Vec<u8> {\n        self.buf\n    }\n");
     code.push_str(
-        "    pub fn finish_with_header(self) -> Vec<u8> {\n        let mut out = Vec::with_capacity(self.buf.len() + core::mem::size_of::<crate::message_header::MessageHeader>());\n        let header = crate::message_header::MessageHeader {\n            block_length: U16::new(Self::BLOCK_LENGTH),\n            template_id: U16::new(Self::TEMPLATE_ID),\n            schema_id: U16::new(Self::SCHEMA_ID),\n            version: U16::new(Self::SCHEMA_VERSION),\n        };\n        out.extend_from_slice(header.as_bytes());\n        out.extend_from_slice(&self.buf);\n        out\n    }\n",
+        "    pub fn finish_with_header(self) -> Vec<u8> {\n        let mut out = Vec::with_capacity(self.buf.len() + core::mem::size_of::<super::message_header::MessageHeader>());\n        let header = super::message_header::MessageHeader {\n            block_length: U16::new(Self::BLOCK_LENGTH),\n            template_id: U16::new(Self::TEMPLATE_ID),\n            schema_id: U16::new(Self::SCHEMA_ID),\n            version: U16::new(Self::SCHEMA_VERSION),\n        };\n        out.extend_from_slice(header.as_bytes());\n        out.extend_from_slice(&self.buf);\n        out\n    }\n",
     );
     code.push_str("}\n\n");
     code.push_str(&format!(
@@ -2417,7 +2417,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
         encoder = encoder_name
     ));
     code.push_str(&format!(
-        "    /// Encode header + body into `dst` without allocation.\n    ///\n    /// `dst` must fit `size_of::<crate::message_header::MessageHeader>() + body_len`. Returns total bytes written.\n    pub fn encode_with_header_into<F>(dst: &mut [u8], header: crate::message_header::MessageHeader, f: F) -> Result<usize, EncodeIntoError>\n    where\n        F: FnOnce(&mut {encoder}<'_>) -> Result<(), EncodeIntoError>,\n    {{\n        let header_len = core::mem::size_of::<crate::message_header::MessageHeader>();\n        if dst.len() < header_len {{\n            return Err(EncodeIntoError::BufferTooSmall {{ required: header_len, available: dst.len() }});\n        }}\n        let body_len = {{\n            let (_, body_dst) = dst.split_at_mut(header_len);\n            let mut encoder = {encoder}::new(body_dst)?;\n            f(&mut encoder)?;\n            encoder.finish()\n        }};\n        let total = header_len.checked_add(body_len).ok_or(EncodeIntoError::InvalidState(\"encoded frame length overflow\"))?;\n        if dst.len() < total {{\n            return Err(EncodeIntoError::BufferTooSmall {{ required: total, available: dst.len() }});\n        }}\n        write_bytes_into(dst, 0, &header)?;\n        Ok(total)\n    }}\n",
+        "    /// Encode header + body into `dst` without allocation.\n    ///\n    /// `dst` must fit `size_of::<super::message_header::MessageHeader>() + body_len`. Returns total bytes written.\n    pub fn encode_with_header_into<F>(dst: &mut [u8], header: super::message_header::MessageHeader, f: F) -> Result<usize, EncodeIntoError>\n    where\n        F: FnOnce(&mut {encoder}<'_>) -> Result<(), EncodeIntoError>,\n    {{\n        let header_len = core::mem::size_of::<super::message_header::MessageHeader>();\n        if dst.len() < header_len {{\n            return Err(EncodeIntoError::BufferTooSmall {{ required: header_len, available: dst.len() }});\n        }}\n        let body_len = {{\n            let (_, body_dst) = dst.split_at_mut(header_len);\n            let mut encoder = {encoder}::new(body_dst)?;\n            f(&mut encoder)?;\n            encoder.finish()\n        }};\n        let total = header_len.checked_add(body_len).ok_or(EncodeIntoError::InvalidState(\"encoded frame length overflow\"))?;\n        if dst.len() < total {{\n            return Err(EncodeIntoError::BufferTooSmall {{ required: total, available: dst.len() }});\n        }}\n        write_bytes_into(dst, 0, &header)?;\n        Ok(total)\n    }}\n",
         encoder = encoder_name
     ));
     code.push_str("}\n\n");
@@ -2511,7 +2511,7 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
     }
     code.push_str("}\n\n");
     code.push_str(&format!(
-        "pub fn parse_with_header<'a>(body: &'a [u8], header: &crate::message_header::MessageHeader) -> Option<({name}View<'a>, &'a [u8])> {{\n    let mut acting_block_length = header.block_length.get() as usize;\n    if acting_block_length == 0 {{ acting_block_length = {name}::BLOCK_LENGTH as usize; }}\n    let acting_version = header.version.get();\n    if body.len() < acting_block_length {{ return None; }}\n    let needed = core::mem::size_of::<{name}>();\n    let (prefix, rest) = body.split_at(acting_block_length);\n    let (parsed, raw) = if acting_block_length >= needed {{\n        let raw = &prefix[..needed];\n        let (msg, _) = Ref::<_, {name}>::from_prefix(raw).ok()?;\n        (Some(Ref::into_ref(msg)), raw)\n    }} else {{\n        (None, prefix)\n    }};\n    let view = {name}View {{ body: {name}Body {{ parsed, raw }}, acting_block_length, acting_version }};\n    Some((view, rest))\n}}\n",
+        "pub fn parse_with_header<'a>(body: &'a [u8], header: &super::message_header::MessageHeader) -> Option<({name}View<'a>, &'a [u8])> {{\n    let mut acting_block_length = header.block_length.get() as usize;\n    if acting_block_length == 0 {{ acting_block_length = {name}::BLOCK_LENGTH as usize; }}\n    let acting_version = header.version.get();\n    if body.len() < acting_block_length {{ return None; }}\n    let needed = core::mem::size_of::<{name}>();\n    let (prefix, rest) = body.split_at(acting_block_length);\n    let (parsed, raw) = if acting_block_length >= needed {{\n        let raw = &prefix[..needed];\n        let (msg, _) = Ref::<_, {name}>::from_prefix(raw).ok()?;\n        (Some(Ref::into_ref(msg)), raw)\n    }} else {{\n        (None, prefix)\n    }};\n    let view = {name}View {{ body: {name}Body {{ parsed, raw }}, acting_block_length, acting_version }};\n    Some((view, rest))\n}}\n",
         name = msg_name
     ));
     Ok(code)
@@ -2696,11 +2696,11 @@ fn resolve_type(
 }
 
 fn schema_type_path(name: &str) -> String {
-    format!("crate::types::{}", type_ident(name))
+    format!("super::types::{}", type_ident(name))
 }
 
 fn schema_enum_path(name: &str) -> String {
-    format!("crate::types::{}", enum_name(name))
+    format!("super::types::{}", enum_name(name))
 }
 
 fn resolve_message_type(
