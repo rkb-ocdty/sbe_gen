@@ -39,6 +39,45 @@ fn generates_basic_schema() {
 }
 
 #[test]
+fn char_encoded_enum_values_use_byte_literals() {
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <enum name="MDEntryTypeBook" encodingType="char">
+                    <validValue name="Bid" description="Bid">0</validValue>
+                    <validValue name="Offer" description="Offer">1</validValue>
+                    <validValue name="ImpliedBid" description="Implied Bid">E</validValue>
+                    <validValue name="ImpliedOffer" description="Implied Offer">F</validValue>
+                    <validValue name="BookReset" description="Book Reset">J</validValue>
+                </enum>
+            </types>
+            <message name="Tick" id="1" blockLength="1">
+                <field name="kind" id="1" type="MDEntryTypeBook" />
+            </message>
+        </messageSchema>
+    "#;
+
+    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
+    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let types_rs = module_map.get("types.rs").expect("types.rs emitted");
+
+    // Variants are emitted using byte-literal syntax.
+    assert!(types_rs.contains("Bid = b'0'"));
+    assert!(types_rs.contains("Offer = b'1'"));
+    assert!(types_rs.contains("ImpliedBid = b'E'"));
+    assert!(types_rs.contains("BookReset = b'J'"));
+
+    // Associated constants and the as_enum match arms switch over the same form.
+    assert!(types_rs.contains("pub const BID: Self = Self((b'0') as u8);"));
+    assert!(types_rs.contains("b'0' => Some(MDEntryTypeBookEnum::Bid)"));
+    assert!(types_rs.contains("b'J' => Some(MDEntryTypeBookEnum::BookReset)"));
+
+    // Sanity: the old numeric form for these printable chars is gone.
+    assert!(!types_rs.contains("Bid = 48u8"));
+    assert!(!types_rs.contains("48u8 => Some(MDEntryTypeBookEnum::Bid)"));
+}
+
+#[test]
 fn rejects_unsupported_field_types_instead_of_silent_drops() {
     let xml = r#"
         <messageSchema package="test">

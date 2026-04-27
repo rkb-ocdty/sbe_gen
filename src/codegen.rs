@@ -1743,12 +1743,7 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                     for (vname, val, vdesc) in values {
                         let variant_name = variant_ident(vname);
                         let literal = if prim_is_char {
-                            if val.len() == 1 {
-                                let c = val.chars().next().unwrap();
-                                format!("{}u8", c as u32)
-                            } else {
-                                val.clone()
-                            }
+                            char_value_literal(val)
                         } else {
                             val.clone()
                         };
@@ -1762,14 +1757,8 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                     code.push_str(&format!("impl {} {{\n", enum_ty));
                     for (vname, val, vdesc) in values {
                         let variant_name = const_ident(vname);
-                        // convert char values to numeric if necessary
                         let literal = if prim_is_char {
-                            if val.len() == 1 {
-                                let c = val.chars().next().unwrap();
-                                format!("{}u8", c as u32)
-                            } else {
-                                val.clone()
-                            }
+                            char_value_literal(val)
                         } else {
                             val.clone()
                         };
@@ -1790,12 +1779,7 @@ fn generate_types(schema: &Schema, opts: &GeneratorOptions) -> String {
                         for (vname, val, _) in values {
                             let variant_name = variant_ident(vname);
                             let literal = if prim_is_char {
-                                if val.len() == 1 {
-                                    let c = val.chars().next().unwrap();
-                                    format!("{}u8", c as u32)
-                                } else {
-                                    val.clone()
-                                }
+                                char_value_literal(val)
                             } else {
                                 val.clone()
                             };
@@ -2519,6 +2503,28 @@ pub struct {}<'a> {{\n    buf: &'a mut [u8],\n    used: usize,\n}}\n\n",
 
 /// Map an SBE primitive to a Rust zero‑copy type.  Returns `None` if
 /// the primitive is not recognised.
+/// Render an enum/set value declared with a CHAR encoding as a Rust literal.
+///
+/// Single printable-ASCII characters become byte literals (`b'X'`) so the
+/// generated code reads like the schema. Non-printable single chars fall back
+/// to the numeric `Nu8` form, and multi-character values are passed through
+/// unchanged.
+fn char_value_literal(val: &str) -> String {
+    let mut chars = val.chars();
+    if let (Some(c), None) = (chars.next(), chars.next()) {
+        let b = u32::from(c);
+        if (0x20..=0x7E).contains(&b) {
+            return match c {
+                '\\' => "b'\\\\'".to_string(),
+                '\'' => "b'\\''".to_string(),
+                _ => format!("b'{}'", c),
+            };
+        }
+        return format!("{}u8", b);
+    }
+    val.to_string()
+}
+
 fn primitive_to_rust(prim: &str, _opts: &GeneratorOptions) -> Option<String> {
     match prim {
         // boolean represented as u8

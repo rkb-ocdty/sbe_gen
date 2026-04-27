@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.3
+
+### Changed
+- Generated `char`-encoded enum variants, associated constants, and `as_enum`
+  match arms now use Rust byte-literal syntax (e.g. `Bid = b'0'`) for printable
+  ASCII values instead of the numeric `Nu8` form (e.g. `Bid = 48u8`). Generated
+  code is more readable and stays aligned with the schema. Non-printable
+  single-character values still fall back to the numeric form.
+
 ## 0.7.2
 
 ### Fixed
