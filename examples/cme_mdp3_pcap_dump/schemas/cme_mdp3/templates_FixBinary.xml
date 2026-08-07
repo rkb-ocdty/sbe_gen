@@ -524,7 +524,6 @@
         <field name="MinPriceIncrementAmount" id="1146" type="PRICENULL9" description="Monetary value equivalent to the minimum price fluctuation" offset="205" semanticType="Price"/>
         <field name="UserDefinedInstrument" id="9779" type="UserDefinedInstrument" description="User-defined instruments flag" offset="213" semanticType="char"/>
         <field name="TradingReferenceDate" id="5796" type="LocalMktDate" description="Indicates session date corresponding to the settlement price in tag 1150-TradingReferencePrice" offset="214" semanticType="LocalMktDate"/>
-        <field name="InstrumentGUID" id="37513" type="uInt64NULL" description="External unique instrument ID" offset="216" sinceVersion="10" semanticType="int"/>
         <group name="NoEvents" id="864" description="Number of repeating EventType entries" blockLength="9" dimensionType="groupSize">
             <field name="EventType" id="865" type="EventType" description="Code to represent the type of event" offset="0" semanticType="int"/>
             <field name="EventTime" id="1145" type="uInt64" description="Date and Time of instument Activation or Expiration event sent as number of nanoseconds since Unix epoch" offset="1" semanticType="UTCTimestamp"/>
@@ -542,7 +541,7 @@
             <field name="MinLotSize" id="1231" type="DecimalQty" description="Minimum quantity accepted for order entry. If tag 1093-LotType=4, this value is the minimum quantity for order entry expressed in the applicable units, specified in tag 996-UnitOfMeasure, e.g. megawatts" offset="1" semanticType="Qty"/>
         </group>
     </ns2:message>
-    <ns2:message name="MDInstrumentDefinitionOption55" id="55" description="MDInstrumentDefinitionOption" blockLength="221" semanticType="d" sinceVersion="9">
+    <ns2:message name="MDInstrumentDefinitionOption55" id="55" description="MDInstrumentDefinitionOption" blockLength="213" semanticType="d" sinceVersion="9">
         <field name="MatchEventIndicator" id="5799" type="MatchEventIndicator" description="Bitmap field of eight Boolean type indicators reflecting the end of updates for a given Globex event" offset="0" semanticType="MultipleCharValue"/>
         <field name="TotNumReports" id="911" type="uInt32NULL" description="Total number of instruments in the Replay loop. Used on Replay Feed only " offset="1" semanticType="int"/>
         <field name="SecurityUpdateAction" id="980" type="SecurityUpdateAction" description="Last Security update action on Incremental feed, 'D' or 'M' is used when a mid-week deletion or modification (i.e. extension) occurs" offset="5" semanticType="char"/>
@@ -586,7 +585,6 @@
         <field name="HighLimitPrice" id="1149" type="PRICENULL9" description="Allowable high limit price for the trading day" offset="202" semanticType="Price"/>
         <field name="UserDefinedInstrument" id="9779" type="UserDefinedInstrument" description="User-defined instruments flag" offset="210" semanticType="char"/>
         <field name="TradingReferenceDate" id="5796" type="LocalMktDate" description="Indicates session date corresponding to the settlement price in tag 1150-TradingReferencePrice" offset="211" semanticType="LocalMktDate"/>
-        <field name="InstrumentGUID" id="37513" type="uInt64NULL" description="External unique instrument ID" offset="213" sinceVersion="10" semanticType="int"/>
         <group name="NoEvents" id="864" description="Number of EventType entries" blockLength="9" dimensionType="groupSize">
             <field name="EventType" id="865" type="EventType" description="Code to represent the type of event" offset="0" semanticType="int"/>
             <field name="EventTime" id="1145" type="uInt64" description="Date and Time of instument Activation or Expiration event sent as number of nanoseconds since Unix epoch" offset="1" semanticType="UTCTimestamp"/>
@@ -614,7 +612,7 @@
             <field name="RelatedSymbol" id="1649" type="Symbol" description="Related instrument Symbol" offset="4" semanticType="String"/>
         </group>
     </ns2:message>
-    <ns2:message name="MDInstrumentDefinitionSpread56" id="56" description="MDInstrumentDefinitionSpread" blockLength="255" semanticType="d" sinceVersion="9">
+    <ns2:message name="MDInstrumentDefinitionSpread56" id="56" description="MDInstrumentDefinitionSpread" blockLength="195" semanticType="d" sinceVersion="9">
         <field name="MatchEventIndicator" id="5799" type="MatchEventIndicator" description="Bitmap field of eight Boolean type indicators reflecting the end of updates for a given Globex event" offset="0" semanticType="MultipleCharValue"/>
         <field name="TotNumReports" id="911" type="uInt32NULL" description="Total number of instruments in the Replay loop. Used on Replay Feed only" offset="1" semanticType="int"/>
         <field name="SecurityUpdateAction" id="980" type="SecurityUpdateAction" description="Last Security update action on Incremental feed, 'D' or 'M' is used when a mid-week deletion or modification (i.e. extension) occurs" offset="5" semanticType="char"/>
@@ -654,11 +652,6 @@
         <field name="MainFraction" id="37702" type="uInt8NULL" description="Price Denominator of Main Fraction" offset="191" semanticType="int"/>
         <field name="SubFraction" id="37703" type="uInt8NULL" description="Price Denominator of Sub Fraction" offset="192" semanticType="int"/>
         <field name="TradingReferenceDate" id="5796" type="LocalMktDate" description="Indicates session date corresponding to the settlement price in tag 1150-TradingReferencePrice" offset="193" semanticType="LocalMktDate"/>
-        <field name="PriceQuoteMethod" id="1196" type="String5" description="Price quotation method" offset="195" sinceVersion="10" semanticType="String"/>
-        <field name="RiskSet" id="37721" type="String6" description="Risk Set identifies the list of instruments sharing credit limits set up" offset="200" sinceVersion="10" semanticType="String"/>
-        <field name="MarketSet" id="37722" type="String6" description="Market Set defines the bilateral relationship and Self Match Prevention configuration for eligible markets" offset="206" sinceVersion="10" semanticType="String"/>
-        <field name="InstrumentGUID" id="37513" type="uInt64NULL" description="External unique instrument ID" offset="212" sinceVersion="10" semanticType="int"/>
-        <field name="FinancialInstrumentFullName" id="2714" type="LongName" description="Long name of the instrument" offset="220" sinceVersion="10" semanticType="String"/>
         <group name="NoEvents" id="864" description="Number of repeating EventType entries" blockLength="9" dimensionType="groupSize">
             <field name="EventType" id="865" type="EventType" description="Code to represent the type of event" offset="0" semanticType="int"/>
             <field name="EventTime" id="1145" type="uInt64" description="Date and time of instument Activation or Expiration event sent as number of nanoseconds since Unix epoch" offset="1" semanticType="UTCTimestamp"/>

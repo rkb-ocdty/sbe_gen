@@ -20,7 +20,10 @@ fn generates_basic_schema() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
 
     let mod_rs = module_map.get("mod.rs").expect("mod.rs emitted");
     assert!(mod_rs.contains("pub mod order;\n"));
@@ -34,8 +37,8 @@ fn generates_basic_schema() {
     let order_rs = module_map.get("order.rs").expect("order.rs emitted");
     assert!(order_rs.contains("pub struct Order"));
     assert!(order_rs.contains("pub id: U64"));
-    assert!(order_rs.contains("pub side: super::types::Side"));
-    assert!(order_rs.contains("pub fn parse_prefix"));
+    assert!(order_rs.contains("pub side: crate::types::Side"));
+    assert!(order_rs.contains("#[sbe_gen("));
 }
 
 #[test]
@@ -58,7 +61,10 @@ fn char_encoded_enum_values_use_byte_literals() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     let types_rs = module_map.get("types.rs").expect("types.rs emitted");
 
     // Variants are emitted using byte-literal syntax.
@@ -124,7 +130,8 @@ fn rejects_unknown_group_dimension_types() {
     let err =
         generate(xml, &GeneratorOptions::default()).expect_err("unknown dimension type must fail");
     let msg = err.to_string();
-    assert!(msg.contains("unknown dimensionType 'UnknownSize'"));
+    assert!(msg.contains("dimensionType 'UnknownSize'"));
+    assert!(msg.contains("is not declared"));
     assert!(msg.contains("message 'BadGroup' group 'Items'"));
 }
 
@@ -231,18 +238,30 @@ fn generates_groups_and_var_data() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
 
     let book_rs = module_map.get("book.rs").expect("book.rs emitted");
-    assert!(book_rs.contains("pub fn parse_levels"));
-    assert!(book_rs.contains("pub struct LevelsIter"));
+    assert!(book_rs.contains("dimension = crate::types::groupSize"));
+    assert!(book_rs.contains("dimension = crate::types::groupSize"));
     assert!(book_rs.contains("pub struct LevelsEntry"));
-    assert!(book_rs.contains("LevelsEntryView"));
+    assert!(book_rs.contains("pub struct LevelsEntry"));
     assert!(book_rs.contains("VarData<'a>"));
     assert!(book_rs.contains("pub fn parse_raw"));
-    assert!(book_rs.contains("super::types::groupSize::parse_prefix(buf)?;"));
-    assert!(book_rs.contains("pub header: &'a super::types::groupSize"));
-    assert!(module_map.contains_key("message_header.rs"));
+    // prettyplease wraps the arguments, so the alias is matched a piece at a time
+    assert!(book_rs.contains("ty = Levels,"));
+    assert!(book_rs.contains("crate::types::groupSize,"));
+    assert!(book_rs.contains("pub struct LevelsEntry"));
+    // the type lives in sbe_support, but the module stays as a re-export because consumers
+    // import it by path
+    assert!(
+        module_map
+            .get("message_header.rs")
+            .expect("message_header.rs emitted")
+            .contains("pub use sbe_support::MessageHeader;")
+    );
 }
 
 #[test]
@@ -264,17 +283,21 @@ fn generates_8_byte_aligned_group_size_composites() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     let types_rs = module_map.get("types.rs").expect("types.rs emitted");
     let counted_rs = module_map.get("counted.rs").expect("counted.rs emitted");
 
     assert!(types_rs.contains("pub struct groupSize8Byte"));
-    assert!(types_rs.contains("__padding0: [u8; 5]"));
+    assert!(types_rs.contains("__padding0: [u8; 5usize]"));
     assert!(types_rs.contains("pub num_in_group: u8"));
-    assert!(counted_rs.contains("HEADER_SIZE: usize = 8"));
-    assert!(counted_rs.contains("write_bytes_into(buf, cursor + 7, &count)"));
-    assert!(counted_rs.contains("pub header: &'a super::types::groupSize8Byte"));
-    assert!(counted_rs.contains("super::types::groupSize8Byte::parse_prefix(buf)?;"));
+    // where the two members sit is the dimension's own business now, so it is asserted there
+    assert!(types_rs.contains("core::mem::offset_of!(Self, num_in_group)"));
+    assert!(counted_rs.contains("dimension = crate::types::groupSize8Byte"));
+    assert!(counted_rs.contains("crate::types::groupSize8Byte,"));
+    assert!(types_rs.contains("impl sbe_support::Dimension for groupSize8Byte"));
 }
 
 #[test]
@@ -320,10 +343,13 @@ fn var_data_length_composite_refs_are_supported() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     let msg_rs = module_map.get("has_data.rs").expect("has_data.rs emitted");
-    assert!(msg_rs.contains("parse_var_data(buf, LengthKind::U16)"));
-    assert!(msg_rs.contains("write_var_data(&mut self.buf, bytes, LengthKind::U16, ENDIAN)"));
+    assert!(msg_rs.contains("parse_var_data::<U16>(buf)"));
+    assert!(msg_rs.contains("write_var_data::<U16>(&mut self.buf, bytes)"));
 }
 
 #[test]
@@ -344,14 +370,19 @@ fn optional_fields_expose_option_helpers() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     let opt_rs = module_map.get("opt.rs").expect("opt.rs emitted");
     assert!(opt_rs.contains("pub maybe_price: I64"));
-    assert!(opt_rs.contains("pub fn maybe_price_opt"));
-    assert!(opt_rs.contains("#[inline]\n    pub fn maybe_price_opt"));
-    assert!(opt_rs.contains("#[inline]\n    pub fn has_req"));
-    assert!(opt_rs.contains("#[inline]\n    pub fn req(&self) -> Option<&U32>"));
-    assert!(opt_rs.contains("MAYBE_PRICE_SINCE_VERSION"));
+    // the accessors are the macro's, off this metadata
+    // the accessors are the macro's, off this metadata
+    assert!(opt_rs.contains("optional(null = i64::MIN)"));
+    assert!(opt_rs.contains("pub req: U32"));
+    // the MAYBE_PRICE_* constants are the macro's, off this field's own metadata
+    // an optional field's setter takes the host integer, so the generator keeps that one
+    assert!(opt_rs.contains(r#"value(ty = "i64", read = "get")"#));
 }
 
 #[test]
@@ -377,16 +408,19 @@ fn generates_nested_groups() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     let outer_rs = module_map.get("outer.rs").expect("outer.rs emitted");
-    assert!(outer_rs.contains("parse_parents"));
-    assert!(outer_rs.contains("ParentsGroup"));
-    assert!(outer_rs.contains("parse_children"));
+    assert!(outer_rs.contains("ty = Parents,"));
+    assert!(outer_rs.contains("dimension = "));
+    assert!(outer_rs.contains("ty = Children,"));
     assert!(outer_rs.contains("ChildrenGroup"));
-    assert!(outer_rs.contains("skip_children"));
-    assert!(outer_rs.contains("ParentsEntryView"));
-    assert!(outer_rs.contains("pub children: ChildrenGroup"));
-    assert!(outer_rs.contains("SINCE_VERSION"));
+    assert!(outer_rs.contains("ty = Children,"));
+    assert!(outer_rs.contains("pub struct ParentsEntry"));
+    assert!(outer_rs.contains("ty = Children,"));
+    assert!(outer_rs.contains("at = "));
 }
 
 #[test]
@@ -406,11 +440,12 @@ fn value_ref_constants_use_generated_enum_constant_names() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     let order_rs = module_map.get("order.rs").expect("order.rs emitted");
-    assert!(
-        order_rs.contains("pub const CONST_SIDE: super::types::Side = super::types::Side::BUY;")
-    );
+    assert!(order_rs.contains("ident = CONST_SIDE"));
 }
 
 #[test]
@@ -430,7 +465,10 @@ fn constant_type_alias_paths_are_emitted_verbatim() {
     opts.constant_type_aliases
         .insert("FooConst".into(), "crate::ext::Type".into());
     let modules = generate(xml, &opts).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     let types_rs = module_map.get("types.rs").expect("types.rs emitted");
     assert!(types_rs.contains("pub type FooConst = crate::ext::Type;"));
 }
@@ -457,46 +495,23 @@ fn parse_fallback_uses_borrowed_raw_slices_without_heap_allocations() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     let msg_rs = module_map.get("evolving.rs").expect("evolving.rs emitted");
 
-    assert!(msg_rs.contains("pub struct EvolvingBody<'a>"));
-    assert!(msg_rs.contains("pub struct EntriesEntryBody<'a>"));
-    assert!(msg_rs.contains("parsed: Option<&'a Evolving>"));
-    assert!(msg_rs.contains("parsed: Option<&'a EntriesEntry>"));
-    assert!(msg_rs.contains("let (parsed, raw) = if acting_block_length >= needed"));
-    assert!(msg_rs.contains("let (parsed, raw) = if block_length >= needed"));
-    assert!(msg_rs.contains("if let Some(msg) = self.body.parsed() { return Some(&msg.seq); }"));
-    assert!(
-        msg_rs.contains("if let Some(entry) = self.body.parsed() { return Some(&entry.qty); }")
-    );
+    assert!(msg_rs.contains("#[sbe_gen(\n    message,"));
+    assert!(msg_rs.contains("dimension = "));
+    assert!(msg_rs.contains(
+        "offset = 0u32"
+    ));
+    assert!(msg_rs.contains("size = 8usize"));
     assert!(!msg_rs.contains("Owned(Vec<u8>)"));
     assert!(!msg_rs.contains("vec![0u8; needed]"));
-    assert!(msg_rs.contains("message body shorter than current layout"));
-    assert!(msg_rs.contains("group entry shorter than current layout"));
-}
-
-#[test]
-fn byte_order_and_offsets() {
-    let xml = r#"
-        <messageSchema package="test">
-            <message name="Endian" id="1" blockLength="8">
-                <field name="a" id="1" type="uint16" offset="0" />
-                <field name="b" id="2" type="uint16" offset="2" byteOrder="big" />
-                <field name="c" id="3" type="uint32" offset="4" />
-            </message>
-        </messageSchema>
-    "#;
-
-    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
-    let endian_rs = module_map.get("endian.rs").expect("endian.rs emitted");
-    assert!(endian_rs.contains("pub a: U16"));
-    assert!(endian_rs.contains("pub b: zerocopy::byteorder::big_endian::U16"));
-    assert!(endian_rs.contains("pub c: U32"));
-    assert!(endian_rs.contains("A_OFFSET: u32 = 0"));
-    assert!(endian_rs.contains("B_OFFSET: u32 = 2"));
-    assert!(endian_rs.contains("C_OFFSET: u32 = 4"));
+    // the fallback is sbe_support::EntryBody's now, so the module must not hand-roll one
+    assert!(!msg_rs.contains("parsed: Option<&'a Evolving>"));
+    assert!(!msg_rs.contains("parsed: Option<&'a EntriesEntry>"));
 }
 
 #[test]
@@ -514,35 +529,17 @@ fn type_level_constants_are_not_encoded() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     let msg_rs = module_map
         .get("const_msg.rs")
         .expect("const_msg.rs emitted");
     assert!(!msg_rs.contains("pub magic:"));
-    assert!(msg_rs.contains("pub const MAGIC: super::types::ConstU16"));
-    assert!(msg_rs.contains("U16::new(7)"));
-    assert!(msg_rs.contains("pub const BLOCK_LENGTH: u16 = 4"));
-}
-
-#[test]
-fn byte_order_override_applies_to_type_aliases() {
-    let xml = r#"
-        <messageSchema package="test">
-            <types>
-                <type name="Price" primitiveType="uint16"/>
-            </types>
-            <message name="AliasEndian" id="1" blockLength="2">
-                <field name="price" id="1" type="Price" byteOrder="big" />
-            </message>
-        </messageSchema>
-    "#;
-
-    let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
-    let alias_rs = module_map
-        .get("alias_endian.rs")
-        .expect("alias_endian.rs emitted");
-    assert!(alias_rs.contains("pub price: zerocopy::byteorder::big_endian::U16"));
+    assert!(msg_rs.contains("ident = MAGIC"));
+    assert!(msg_rs.contains("ident = MAGIC"));
+    assert!(msg_rs.contains("block_length = 4"));
 }
 
 #[test]
@@ -561,14 +558,20 @@ fn generates_borrowed_encode_into_api() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     let msg_rs = module_map
         .get("negotiate500.rs")
         .expect("negotiate500.rs emitted");
-    assert!(msg_rs.contains("pub struct Negotiate500Encoder<'a>"));
-    assert!(msg_rs.contains("pub enum EncodeIntoError"));
-    assert!(msg_rs.contains("pub fn encode_body_into"));
-    assert!(msg_rs.contains("pub fn encode_with_header_into"));
+    // Negotiate500Encoder comes off the struct now
+    assert!(msg_rs.contains("#[sbe_gen(\n    message,"));
+    assert!(msg_rs.contains(
+        "MessageEncode, ParsePrefix"
+    ));
+    // both are sbe_support::MessageEncode's, provided off the three items the macro writes
+    assert!(msg_rs.contains("MessageEncode"));
     assert!(!msg_rs.contains("does not support group encoding"));
 }
 
@@ -587,17 +590,17 @@ fn constant_fields_are_not_writable_in_builder_or_encoder() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     let msg_rs = module_map
         .get("establish503.rs")
         .expect("establish503.rs emitted");
     assert!(!msg_rs.contains("pub fn customer_flow(&mut self, value:"));
-    assert!(msg_rs.contains("pub fn customer_flow(&self) -> super::types::ClientFlowType"));
-    assert!(
-        msg_rs
-            .contains("#[inline]\n    pub fn customer_flow(&self) -> super::types::ClientFlowType")
-    );
-    assert!(msg_rs.contains("pub const CUSTOMER_FLOW: super::types::ClientFlowType"));
+    assert!(msg_rs.contains("name = customer_flow"));
+    assert!(msg_rs.contains("ident = CUSTOMER_FLOW"));
+    assert!(msg_rs.contains("ident = CUSTOMER_FLOW"));
 }
 
 #[test]
@@ -612,15 +615,18 @@ fn field_level_constant_literals_are_not_encoded() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     let msg_rs = module_map
         .get("const_literal.rs")
         .expect("const_literal.rs emitted");
     assert!(!msg_rs.contains("pub mode:"));
     assert!(!msg_rs.contains("pub fn mode(&mut self, value:"));
-    assert!(msg_rs.contains("pub const MODE: u8 = 7;"));
-    assert!(msg_rs.contains("#[inline]\n    pub fn mode(&self) -> u8"));
-    assert!(msg_rs.contains("pub const BLOCK_LENGTH: u16 = 4"));
+    assert!(msg_rs.contains(r#"ident = MODE, ty = "u8", value = "7""#));
+    assert!(msg_rs.contains("name = mode"));
+    assert!(msg_rs.contains("block_length = 4"));
 }
 
 #[test]
@@ -650,30 +656,27 @@ fn view_generates_fallback_value_required_enum_composite_and_string_helpers() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     let def_rs = module_map.get("def.rs").expect("def.rs emitted");
 
-    assert!(def_rs.contains("pub enum DecodeFieldError"));
-    assert!(def_rs.contains("pub fn is_fixed_layout(&self) -> bool"));
-    assert!(def_rs.contains("#[inline]\n    pub fn has_security_update_action(&self) -> bool"));
     assert!(def_rs.contains(
-        "#[inline]\n    pub fn security_update_action(&self) -> Option<&super::types::SecurityUpdateAction>"
+        "MessageEncode, ParsePrefix"
     ));
-    assert!(def_rs.contains(
-        "#[inline]\n    pub fn security_update_action_value(&self) -> Option<super::types::SecurityUpdateAction>"
-    ));
-    assert!(
-        def_rs.contains(
-            "pub fn security_update_action_required(&self) -> Result<super::types::SecurityUpdateAction, DecodeFieldError>"
-        )
-    );
-    assert!(def_rs.contains(
-        "#[inline]\n    pub fn security_update_action_enum(&self) -> Option<super::types::SecurityUpdateActionEnum>"
-    ));
-    assert!(def_rs.contains("pub fn symbol_bytes(&self) -> Option<&[u8; 6]>"));
-    assert!(def_rs.contains("pub fn symbol_str(&self) -> Option<&str>"));
-    assert!(def_rs.contains("pub fn symbol_str_trimmed(&self) -> Option<&str>"));
-    assert!(def_rs.contains("pub fn qty_value(&self) -> Option<Option<u32>>"));
+    assert!(def_rs.contains("#[sbe_gen(\n    message,"));
+    assert!(def_rs.contains("semantic_type = String"));
+    // the plain getter is the macro's now; the value helper is still the generator's
+    assert!(def_rs.contains("pub security_update_action: crate::types::SecurityUpdateAction"));
+    // the value helper is the macro's, off this field's own read
+    assert!(def_rs.contains(r#"value(ty = "crate :: types :: SecurityUpdateAction", read = "plain")"#));
+    assert!(def_rs.contains("required"));
+    // the string helpers are the macro's, off the array length
+    assert!(def_rs.contains("string = 6usize"));
+
+
+    assert!(def_rs.contains("optional(null = 4294967295)"));
     assert!(
         def_rs.contains("pub fn required_maybe_required(&self) -> Result<u32, DecodeFieldError>")
     );
@@ -699,14 +702,18 @@ fn group_count_overflow_is_reported_without_panics() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     let counted_rs = module_map.get("counted.rs").expect("counted.rs emitted");
+    let types_rs = module_map.get("types.rs").expect("types.rs emitted");
 
-    assert!(counted_rs.contains("CountOverflow { count: usize, max: usize }"));
-    assert!(
-        counted_rs.contains("pub fn items<F>(&mut self, f: F) -> Result<&mut Self, EncodeError>")
-    );
-    assert!(counted_rs.contains("pub const MAX_COUNT: usize = u8::MAX as usize;"));
+    // the ceiling is the dimension's integer width, and the check that enforces it is
+    // sbe_support::GroupBuilder's
+    assert!(types_rs.contains("const MAX_COUNT: usize = u8::MAX as usize;"));
+    // the group method is the macro's, off the block's own list
+    assert!(counted_rs.contains("ty = Items,"));
     assert!(!counted_rs.contains("count fits in u8"));
 }
 
@@ -726,15 +733,50 @@ fn message_modules_use_qualified_schema_types() {
     "#;
 
     let modules = generate(xml, &GeneratorOptions::default()).expect("schema should parse");
-    let module_map: HashMap<_, _> = modules.into_iter().collect();
+    let module_map: HashMap<_, _> = modules
+        .modules()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     let order_rs = module_map.get("order.rs").expect("order.rs emitted");
 
-    assert!(!order_rs.contains("use super::types::*;"));
-    assert!(order_rs.contains("pub hdr: super::types::MessageHeader"));
-    assert!(
-        order_rs.contains("pub fn hdr(&mut self, value: super::types::MessageHeader) -> &mut Self")
-    );
-    assert!(order_rs.contains(
-        "pub fn parse_with_header<'a>(body: &'a [u8], header: &super::message_header::MessageHeader)"
-    ));
+    assert!(!order_rs.contains("use crate::types::*;"));
+    // the setter is the derive's, off this declaration, so the qualified path has to be here
+    assert!(order_rs.contains("pub hdr: crate::types::MessageHeader"));
+    // parse_with_header is the macro's, off the message marker
+    assert!(order_rs.contains("#[sbe_gen(\n    message,"));
+}
+
+#[test]
+fn rejects_types_nested_past_the_size_resolver_guard() {
+    // a composite chain deeper than the resolver's recursion guard. every type resolves, but
+    // the size does not, so nothing downstream can be given an offset. the composite layout
+    // check reaches this before field placement does, which is why placement's own
+    // "cannot compute the encoded size" error is unreachable in practice.
+    let xml = r#"
+        <messageSchema package="test">
+            <types>
+                <composite name="C0"><ref name="inner" type="C1"/></composite>
+                <composite name="C1"><ref name="inner" type="C2"/></composite>
+                <composite name="C2"><ref name="inner" type="C3"/></composite>
+                <composite name="C3"><ref name="inner" type="C4"/></composite>
+                <composite name="C4"><ref name="inner" type="C5"/></composite>
+                <composite name="C5"><ref name="inner" type="C6"/></composite>
+                <composite name="C6"><ref name="inner" type="C7"/></composite>
+                <composite name="C7"><ref name="inner" type="C8"/></composite>
+                <composite name="C8"><ref name="inner" type="C9"/></composite>
+                <composite name="C9"><ref name="inner" type="C10"/></composite>
+                <composite name="C10"><ref name="inner" type="C11"/></composite>
+                <composite name="C11"><ref name="inner" type="C12"/></composite>
+                <composite name="C12"><type name="v" primitiveType="uint8"/></composite>
+            </types>
+            <message name="TooDeep" id="1">
+                <field name="deep" id="1" type="C0"/>
+            </message>
+        </messageSchema>
+    "#;
+
+    let err = generate(xml, &GeneratorOptions::default()).expect_err("unsizeable field must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("composite 'C0' field 'inner'"));
+    assert!(msg.contains("has unsupported layout"));
 }

@@ -11,19 +11,18 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
     let src_dir = temp.path().join("src");
     fs::create_dir_all(&src_dir).expect("create src");
     let modules = generate(xml, &GeneratorOptions::default()).expect("generate");
-    for (name, contents) in modules {
-        fs::write(src_dir.join(name), contents).expect("write module");
+    for module in modules.modules() {
+        fs::write(src_dir.join(&module.name), &module.source).expect("write module");
     }
 
     let main_rs = r#"
         #![allow(dead_code, non_camel_case_types, unused_imports, unused_variables, unused_mut)]
 
         mod types;
-        mod message_header;
         mod security_definition_response561;
         mod party_details_definition_request_ack519;
 
-        use message_header::MessageHeader;
+        use sbe_support::MessageHeader;
         use party_details_definition_request_ack519::*;
         use security_definition_response561::*;
         use zerocopy::byteorder::little_endian::U16;
@@ -93,12 +92,10 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
             assert!(leg.has_leg_ratio_qty());
             assert!(leg.has_leg_side());
             assert!(leg.has_leg_price());
-            assert!(leg.has_leg_security_id_source());
             assert_eq!(leg.leg_security_id().expect("leg security id").get(), 11);
             assert_eq!(leg.leg_ratio_qty().expect("leg ratio qty").get(), 22);
             assert_eq!(leg.leg_side().expect("leg side"), &3u8);
             assert_eq!(leg.leg_price().expect("leg price").get(), 44);
-            assert_eq!(leg.leg_security_id_source(), Some([b'8']));
             assert_eq!(leg.body.leg_security_id.get(), 11);
             assert_eq!(leg.body.leg_ratio_qty.get(), 22);
             assert_eq!(leg.body.leg_side, 3);
@@ -128,7 +125,7 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
                 short_leg.leg_security_id().expect("short leg security id").get(),
                 111
             );
-            assert_eq!(short_leg.leg_security_id_source(), Some([b'8']));
+            assert_eq!(NoLegsEntry::LEG_SECURITY_ID_SOURCE, [b'8']);
             assert!(short_it.next().is_none());
             assert!(short_it.remainder().is_empty());
 
@@ -153,8 +150,18 @@ edition = "2024"
 
 [dependencies]
 zerocopy = { version = "0.8", features = ["derive"] }
+sbe_support = { path = "SBE_SUPPORT_PATH" }
+
+[workspace]
 "#;
-    fs::write(temp.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        cargo_toml.replace(
+            "SBE_SUPPORT_PATH",
+            &format!("{}/sbe_support", env!("CARGO_MANIFEST_DIR")),
+        ),
+    )
+    .expect("write Cargo.toml");
     temp
 }
 

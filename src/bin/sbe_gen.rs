@@ -12,18 +12,12 @@ struct Args {
     /// Output directory for generated Rust modules
     #[arg(short = 'o', long)]
     output: PathBuf,
-    /// Endianness for multi‑byte fields (little or big)
-    #[arg(short = 'e', long, default_value = "little", value_parser = ["little", "big"])]
-    endian: String,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let xml = fs::read_to_string(&args.input)?;
-    let opts = sbe_gen::GeneratorOptions {
-        endian: args.endian.clone(),
-        ..Default::default()
-    };
+    let opts = sbe_gen::GeneratorOptions::default();
     sbe_gen::generate_to(&xml, &args.output, &opts)?;
     Ok(())
 }

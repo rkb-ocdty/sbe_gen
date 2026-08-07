@@ -18,11 +18,8 @@ pub mod types {
     pub use crate::generated::cme_mdp3::types::*;
 }
 
-pub mod message_header {
-    pub use crate::generated::cme_mdp3::message_header::*;
-}
-
 mod dump;
+pub mod json_types;
 
 use crate::dump::dump_cme_packet;
 

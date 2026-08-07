@@ -7,6 +7,7 @@ use crate::generated::cme_mdp3::md_incremental_refresh_session_statistics51 as s
 use crate::generated::cme_mdp3::md_incremental_refresh_trade_summary48 as trade_summary;
 use crate::generated::cme_mdp3::md_instrument_definition_spread56 as spread_def;
 use crate::generated::cme_mdp3::security_status30 as security_status;
+use primitive_fixed_point_decimal::fpdec;
 use zerocopy::IntoBytes;
 use zerocopy::byteorder::little_endian::U16;
 
@@ -53,6 +54,16 @@ fn parse_single_message(payload: &[u8]) -> (CmePacketHdr, MessageHeader, &[u8]) 
     );
 
     (*pkt_hdr, cme_hdr.sbe_hdr, body)
+}
+
+/// The SBE message — header and body — as one slice.
+///
+/// CME frames it behind a length, and the SBE header sits directly after that, so the whole
+/// message is already contiguous and needs no reassembly.
+fn sbe_message(payload: &[u8]) -> &[u8] {
+    let (_, rest) = CmePacketHdr::parse_prefix(payload).expect("packet header");
+    let (_len, sbe) = zerocopy::Ref::<_, U16>::from_prefix(rest).expect("message length");
+    sbe
 }
 
 fn group_entry_len(block_length: u16, declared: usize) -> usize {
@@ -173,7 +184,7 @@ fn template_48_trade_summary() {
     let mut iter = entries.iter();
     let first = iter.next().expect("first entry");
     assert_eq!(
-        first.md_entry_px().expect("md_entry_px").mantissa.get(),
+        first.md_entry_px().expect("md_entry_px").0.get(),
         30_500_000_000_000
     );
     assert_eq!(first.md_entry_size().expect("md_entry_size").get(), 2);
@@ -192,7 +203,11 @@ fn template_48_trade_summary() {
     let after_entries = iter.remainder();
     let order_entries =
         trade_summary::parse_no_order_id_entries(after_entries).expect("order entries");
-    assert_eq!(order_entries.count(), 0);
+    // Changed from 0. 
+    //
+    // The entry struct was 12 bytes against a declared blockLength
+    // of 16, so anything past the first entry was read at the wrong offset and this looked empty
+    assert_eq!(order_entries.count(), 3);
 }
 
 #[test]
@@ -215,7 +230,7 @@ fn template_51_session_statistics() {
 
     let first = entries.iter().next().expect("first entry");
     assert_eq!(
-        first.md_entry_px().expect("md_entry_px").mantissa.get(),
+        first.md_entry_px().expect("md_entry_px").0.get(),
         875_000_000_000
     );
     assert_eq!(first.security_id().expect("security_id").get(), 4_242_033);
@@ -638,7 +653,132 @@ fn instrument_definition_spread56_no_legs_parses_when_group_block_length_is_shor
     assert_eq!(first.leg_security_id().expect("leg security id").get(), 123);
     assert_eq!(first.leg_ratio_qty().expect("leg ratio qty"), &7i8);
     assert!(first.leg_option_delta().is_none());
-    assert_eq!(first.leg_security_id_source(), Some([56u8]));
+    assert_eq!(spread_def::NoLegsEntry::LEG_SECURITY_ID_SOURCE, [56u8]);
     assert!(it.next().is_none());
     assert!(it.remainder().is_empty());
+}
+
+#[test]
+fn slice_getter_matches_the_iterator() {
+    // a slice steps by size_of and the wire steps by blockLength; these disagreed until the
+    // entry struct was padded out to the declared block
+    let whole =
+        trade_summary::MDIncrementalRefreshTradeSummary48Ref::parse_message(sbe_message(
+            TEMPLATE_48_PACKET,
+        ))
+        .expect("whole message");
+    let (_p, msg_hdr, body) = parse_single_message(TEMPLATE_48_PACKET);
+    let (_, after_fixed) = trade_summary::parse_with_header(body, &msg_hdr).expect("parse");
+    let entries = trade_summary::parse_no_md_entries(after_fixed).expect("entries");
+    let mut it = entries.iter();
+    it.next();
+    let orders = trade_summary::parse_no_order_id_entries(it.remainder()).expect("orders");
+    let by_iter: Vec<_> = orders.iter().map(|e| e.body.order_id.get()).collect();
+    let by_slice: Vec<_> = whole
+        .no_order_id_entries
+        .iter()
+        .map(|e| e.order_id.get())
+        .collect();
+    assert_eq!(by_iter, by_slice, "slice getter must agree with the iterator");
+}
+
+#[test]
+fn whole_message_agrees_with_the_iterator() {
+    let whole =
+        trade_summary::MDIncrementalRefreshTradeSummary48Ref::parse_message(sbe_message(
+            TEMPLATE_48_PACKET,
+        ))
+        .expect("whole message");
+    let (_p, msg_hdr, body) = parse_single_message(TEMPLATE_48_PACKET);
+
+    assert_eq!(whole.transact_time.get(), 1_689_544_800_000_000_000);
+    assert_eq!(whole.no_md_entries.len(), 1);
+    assert_eq!(whole.no_order_id_entries.len(), 3);
+
+    let (_, after_fixed) = trade_summary::parse_with_header(body, &msg_hdr).expect("view");
+    let entries = trade_summary::parse_no_md_entries(after_fixed).expect("entries");
+    let mut it = entries.iter();
+    let first = it.next().expect("first");
+    assert_eq!(
+        whole.no_md_entries[0].md_entry_px.0.get(),
+        first.md_entry_px().expect("px").0.get()
+    );
+    let orders = trade_summary::parse_no_order_id_entries(it.remainder()).expect("orders");
+    let by_iter: Vec<_> = orders.iter().map(|e| e.body.order_id.get()).collect();
+    let by_whole: Vec<_> = whole.no_order_id_entries.iter().map(|e| e.order_id.get()).collect();
+    assert_eq!(by_iter, by_whole);
+
+    let owned = whole.to_owned();
+    assert_eq!(owned.no_order_id_entries, whole.no_order_id_entries);
+    assert_eq!(owned.transact_time.get(), whole.transact_time.get());
+
+    let copied = whole;
+    assert_eq!(copied, whole);
+}
+
+#[test]
+fn whole_message_to_json() {
+    let whole = trade_summary::MDIncrementalRefreshTradeSummary48Ref::parse_message(sbe_message(
+        TEMPLATE_48_PACKET,
+    ))
+    .unwrap();
+
+
+    assert_eq!(
+        whole.no_md_entries[0].md_entry_px.get(),
+        fpdec!(30500)
+    );
+
+    assert_eq!(
+        serde_json::to_value(whole).unwrap(),
+        serde_json::json!({
+            "TransactTime": "2023-07-16T22:00:00.000000000Z",
+            "MatchEventIndicator": 1,
+            "NoMDEntries": [{
+                "MDEntryPx": "30500",
+                "MDEntrySize": 2,
+                "SecurityID": 5785,
+                "RptSeq": 45,
+                "NumberOfOrders": 3,
+                "AggressorSide": 0,
+                "MDUpdateAction": 0,
+                "MDTradeEntryID": 177,
+            }],
+            "NoOrderIDEntries": [
+                { "OrderID": 743_909_193_940u64, "LastQty": 2 },
+                { "OrderID": 743_909_193_814u64, "LastQty": 1 },
+                { "OrderID": 743_909_193_815u64, "LastQty": 1 },
+            ],
+        })
+    );
+}
+
+
+#[test]
+fn json_roundtrips_through_the_owned_message() {
+    let borrowed = trade_summary::MDIncrementalRefreshTradeSummary48Ref::parse_message(
+        sbe_message(TEMPLATE_48_PACKET),
+    )
+    .expect("whole message");
+
+    let json = serde_json::to_string(&borrowed).expect("to json");
+    let owned: trade_summary::MDIncrementalRefreshTradeSummary48Owned =
+        serde_json::from_str(&json).expect("from json");
+
+    assert_eq!(owned.block, *borrowed.block);
+    assert_eq!(owned.no_md_entries, borrowed.no_md_entries);
+    assert_eq!(owned.no_order_id_entries, borrowed.no_order_id_entries);
+    assert_eq!(serde_json::to_string(&owned).expect("again"), json);
+
+    // the bytes are what actually matter: a value that survives JSON has to land back on the
+    // wire identically, padding included
+    assert_eq!(owned.block.as_bytes(), borrowed.block.as_bytes());
+    assert_eq!(
+        owned.no_md_entries.as_bytes(),
+        borrowed.no_md_entries.as_bytes()
+    );
+    assert_eq!(
+        owned.no_order_id_entries.as_bytes(),
+        borrowed.no_order_id_entries.as_bytes()
+    );
 }

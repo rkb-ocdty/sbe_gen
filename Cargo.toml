@@ -1,6 +1,9 @@
+[workspace]
+members = ["sbe_gen_derive", "sbe_support"]
+
 [package]
 name = "sbe_gen"
-version = "0.7.3"
+version = "1.0.0-beta"
 edition = "2024"
 authors = ["Your Name <you@example.com>"]
 description = "Simple Binary Encoding (SBE) code generator for Rust using zerocopy"
@@ -12,6 +15,13 @@ roxmltree = "0.19"
 thiserror = "1.0"
 heck = "0.4"
 clap = { version = "4.1", features = ["derive"] }
+syn = { version = "3.0.3", features = ["extra-traits"] }
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+prettyplease = "0.3.0"
+strum = { version = "0.28.0", features = ["derive"] }
+derive_more = { version = "2.1.1", features = ["try_unwrap", "is_variant", "deref"] }
+derive_generic_visitor = "1.1.0"
 
 [dev-dependencies]
 tempfile = "3"

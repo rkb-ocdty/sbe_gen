@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use sbe_gen::{GeneratorOptions, generate_to};
+use sbe_gen::{DeriveSerialize, GeneratorOptions, generate_to_with};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
@@ -107,7 +107,9 @@ fn run_generator(
     output: &Path,
     opts: &GeneratorOptions,
 ) -> Result<(), Box<dyn Error>> {
-    generate_to(schema, output, opts).map_err(|e| {
+    let serde = DeriveSerialize::default()
+        .map_semantic("UTCTimestamp", "crate::json_types::utc_timestamp");
+    generate_to_with(schema, output, opts, &[&serde]).map_err(|e| {
         format!(
             "sbe_gen failed for schema {} -> {}: {}",
             schema_path.display(),
@@ -124,6 +126,12 @@ fn generator_options() -> GeneratorOptions {
             "#![allow(clippy::all, non_upper_case_globals, unused_parens, unused_imports, unused_mut)]"
                 .to_string(),
         ),
+        // laid out identically to what the schema declares, so it is read off the wire rather
+        // than converted
+        type_map: [("PRICE9", "crate::json_types::Price9")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
         ..Default::default()
     }
 }

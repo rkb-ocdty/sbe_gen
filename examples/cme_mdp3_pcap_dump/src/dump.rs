@@ -6,7 +6,8 @@ use crate::generated::cme_mdp3::md_incremental_refresh_trade_summary48 as trade_
 use crate::generated::cme_mdp3::security_status30 as security_status;
 use crate::generated::cme_mdp3::snapshot_full_refresh_order_book53 as snap_book;
 use crate::generated::cme_mdp3::snapshot_refresh_top_orders59 as top_orders;
-use crate::generated::cme_mdp3::types::{PRICE9, PRICENULL9};
+use crate::generated::cme_mdp3::types::PRICENULL9;
+use crate::json_types::Price9;
 use std::mem;
 use zerocopy::byteorder::little_endian::{U16, U32, U64};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Ref, Unaligned};
@@ -484,10 +485,8 @@ fn decode_i32_null(value: i32) -> Option<i32> {
     if value == i32::MAX { None } else { Some(value) }
 }
 
-fn decode_price(price: &PRICE9) -> f64 {
-    let m = price.mantissa.get();
-    let e = PRICE9::EXPONENT as i32;
-    (m as f64) * 10f64.powi(e)
+fn decode_price(price: &Price9) -> f64 {
+    price.get().into()
 }
 
 fn decode_price_null(price: &PRICENULL9) -> Option<f64> {

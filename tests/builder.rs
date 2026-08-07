@@ -11,15 +11,14 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
     let src_dir = temp.path().join("src");
     fs::create_dir_all(&src_dir).expect("create src");
     let modules = generate(xml, &GeneratorOptions::default()).expect("generate");
-    for (name, contents) in modules {
-        fs::write(src_dir.join(name), contents).expect("write module");
+    for module in modules.modules() {
+        fs::write(src_dir.join(&module.name), &module.source).expect("write module");
     }
     // simple binary exercising the builders
     let main_rs = r#"
         #![allow(dead_code, non_camel_case_types, unused_imports, unused_variables, unused_mut)]
 
         mod types;
-        mod message_header;
         mod order_book;
 
         use order_book::*;
@@ -79,8 +78,18 @@ edition = "2024"
 
 [dependencies]
 zerocopy = { version = "0.8", features = ["derive"] }
+sbe_support = { path = "SBE_SUPPORT_PATH" }
+
+[workspace]
 "#;
-    fs::write(temp.path().join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        cargo_toml.replace(
+            "SBE_SUPPORT_PATH",
+            &format!("{}/sbe_support", env!("CARGO_MANIFEST_DIR")),
+        ),
+    )
+    .expect("write Cargo.toml");
     temp
 }
 
@@ -113,7 +122,7 @@ fn builders_round_trip_through_decoder() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"));
     let temp = write_generated(workspace, xml);
     let status = Command::new("cargo")
-        .args(["run", "--quiet", "--offline"])
+        .args(["run", "--quiet"])
         .current_dir(temp.path())
         .status()
         .expect("spawn cargo");
