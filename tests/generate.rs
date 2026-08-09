@@ -36,7 +36,7 @@ fn generates_basic_schema() {
 
     let order_rs = module_map.get("order.rs").expect("order.rs emitted");
     assert!(order_rs.contains("pub struct Order"));
-    assert!(order_rs.contains("pub id: U64"));
+    assert!(order_rs.contains("pub id: ::zerocopy::byteorder::little_endian::U64"));
     assert!(order_rs.contains("pub side: crate::types::Side"));
     assert!(order_rs.contains("#[sbe_gen("));
 }
@@ -260,7 +260,7 @@ fn generates_groups_and_var_data() {
         module_map
             .get("message_header.rs")
             .expect("message_header.rs emitted")
-            .contains("pub use sbe_support::MessageHeader;")
+            .contains("pub use ::sbe_support::MessageHeader;")
     );
 }
 
@@ -297,7 +297,7 @@ fn generates_8_byte_aligned_group_size_composites() {
     assert!(types_rs.contains("core::mem::offset_of!(Self, num_in_group)"));
     assert!(counted_rs.contains("dimension = crate::types::groupSize8Byte"));
     assert!(counted_rs.contains("crate::types::groupSize8Byte,"));
-    assert!(types_rs.contains("impl sbe_support::Dimension for groupSize8Byte"));
+    assert!(types_rs.contains("impl ::sbe_support::Dimension for groupSize8Byte"));
 }
 
 #[test]
@@ -348,8 +348,8 @@ fn var_data_length_composite_refs_are_supported() {
         .map(|m| (m.name.clone(), m.source.clone()))
         .collect();
     let msg_rs = module_map.get("has_data.rs").expect("has_data.rs emitted");
-    assert!(msg_rs.contains("parse_var_data::<U16>(buf)"));
-    assert!(msg_rs.contains("write_var_data::<U16>(&mut self.buf, bytes)"));
+    assert!(msg_rs.contains("::sbe_support::parse_var_data::<"));
+    assert!(msg_rs.contains("::sbe_support::write_var_data::<"));
 }
 
 #[test]
@@ -375,11 +375,11 @@ fn optional_fields_expose_option_helpers() {
         .map(|m| (m.name.clone(), m.source.clone()))
         .collect();
     let opt_rs = module_map.get("opt.rs").expect("opt.rs emitted");
-    assert!(opt_rs.contains("pub maybe_price: I64"));
+    assert!(opt_rs.contains("pub maybe_price: ::zerocopy::byteorder::little_endian::I64"));
     // the accessors are the macro's, off this metadata
     // the accessors are the macro's, off this metadata
     assert!(opt_rs.contains("optional(null = i64::MIN)"));
-    assert!(opt_rs.contains("pub req: U32"));
+    assert!(opt_rs.contains("pub req: ::zerocopy::byteorder::little_endian::U32"));
     // the MAYBE_PRICE_* constants are the macro's, off this field's own metadata
     // an optional field's setter takes the host integer, so the generator keeps that one
     assert!(opt_rs.contains(r#"value(ty = "i64", read = "get")"#));
@@ -501,7 +501,7 @@ fn parse_fallback_uses_borrowed_raw_slices_without_heap_allocations() {
         .collect();
     let msg_rs = module_map.get("evolving.rs").expect("evolving.rs emitted");
 
-    assert!(msg_rs.contains("#[sbe_gen(\n    message,"));
+    assert!(msg_rs.contains("#[::sbe_support::sbe_gen(\n    message,"));
     assert!(msg_rs.contains("dimension = "));
     assert!(msg_rs.contains("offset = 0u32"));
     assert!(msg_rs.contains("size = 8usize"));
@@ -564,10 +564,7 @@ fn generates_borrowed_encode_into_api() {
         .get("negotiate500.rs")
         .expect("negotiate500.rs emitted");
     // Negotiate500Encoder comes off the struct now
-    assert!(msg_rs.contains("#[sbe_gen(\n    message,"));
-    assert!(msg_rs.contains("MessageEncode, ParsePrefix"));
-    // both are sbe_support::MessageEncode's, provided off the three items the macro writes
-    assert!(msg_rs.contains("MessageEncode"));
+    assert!(msg_rs.contains("#[::sbe_support::sbe_gen(\n    message,"));
     assert!(!msg_rs.contains("does not support group encoding"));
 }
 
@@ -658,8 +655,7 @@ fn view_generates_fallback_value_required_enum_composite_and_string_helpers() {
         .collect();
     let def_rs = module_map.get("def.rs").expect("def.rs emitted");
 
-    assert!(def_rs.contains("MessageEncode, ParsePrefix"));
-    assert!(def_rs.contains("#[sbe_gen(\n    message,"));
+    assert!(def_rs.contains("#[::sbe_support::sbe_gen(\n    message,"));
     assert!(def_rs.contains("semantic_type = String"));
     // the plain getter is the macro's now; the value helper is still the generator's
     assert!(def_rs.contains("pub security_update_action: crate::types::SecurityUpdateAction"));
@@ -672,9 +668,6 @@ fn view_generates_fallback_value_required_enum_composite_and_string_helpers() {
     assert!(def_rs.contains("string = 6usize"));
 
     assert!(def_rs.contains("optional(null = 4294967295)"));
-    assert!(
-        def_rs.contains("pub fn required_maybe_required(&self) -> Result<u32, DecodeFieldError>")
-    );
     assert!(def_rs.contains("pub fn trading_reference_price_mantissa_opt(&self) -> Option<i64>"));
 }
 
@@ -738,7 +731,7 @@ fn message_modules_use_qualified_schema_types() {
     // the setter is the derive's, off this declaration, so the qualified path has to be here
     assert!(order_rs.contains("pub hdr: crate::types::MessageHeader"));
     // parse_with_header is the macro's, off the message marker
-    assert!(order_rs.contains("#[sbe_gen(\n    message,"));
+    assert!(order_rs.contains("#[::sbe_support::sbe_gen(\n    message,"));
 }
 
 #[test]

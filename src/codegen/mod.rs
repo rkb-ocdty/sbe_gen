@@ -350,13 +350,15 @@ fn base_name(ty: &str) -> String {
 /// The methods `#[sbe_gen]` will write for a block, which are not in the file this sees and
 /// would otherwise only collide once the generated crate is compiled.
 fn sbe_gen_names(s: &syn::ItemStruct) -> Vec<(String, String)> {
+    let is_sbe_gen =
+        |a: &&syn::Attribute| a.path().segments.last().is_some_and(|s| s.ident == "sbe_gen");
     let carries = |attrs: &[syn::Attribute], key: &str| {
         attrs
             .iter()
-            .filter(|a| a.path().is_ident("sbe_gen"))
+            .filter(is_sbe_gen)
             .any(|a| a.to_token_stream().to_string().contains(key))
     };
-    if !s.attrs.iter().any(|a| a.path().is_ident("sbe_gen")) {
+    if !s.attrs.iter().any(|a| is_sbe_gen(&a)) {
         return Vec::new();
     }
     let (view, block) = (format!("impl {}View", s.ident), format!("impl {}", s.ident));
