@@ -23,7 +23,7 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
         mod trade;
 
         use heartbeat::*;
-        use sbe_support::MessageHeader;
+        use sbe_support::{MessageEncode, MessageHeader};
         use negotiate500::*;
         use trade::*;
         use zerocopy::byteorder::little_endian::U16;
@@ -83,7 +83,7 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
                 Ok(())
             }).expect_err("expected buffer-too-small");
             match short_err {
-                negotiate500::EncodeIntoError::BufferTooSmall { required, available } => {
+                sbe_support::EncodeIntoError::BufferTooSmall { required, available } => {
                     assert!(required > available);
                     assert_eq!(available, 8);
                 }
@@ -99,7 +99,7 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
                 Ok(())
             }).expect_err("expected length-overflow");
             match overflow_err {
-                negotiate500::EncodeIntoError::LengthOverflow { len, max } => {
+                sbe_support::EncodeIntoError::LengthOverflow { len, max } => {
                     assert_eq!(len, 300);
                     assert_eq!(max, 255);
                 }
