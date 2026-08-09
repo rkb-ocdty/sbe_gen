@@ -80,13 +80,19 @@ Note: helper functions such as `parse_with_header` and `parse_<group>`
 are defined in each message module (for example,
 `crate::sbe::heartbeat::parse_with_header`).
 
-Add `zerocopy` and `sbe_support` to your Cargo.toml. Generated modules use both
-directly, and `sbe_support` carries the `#[sbe_gen]` macro.
+Generated code names `::sbe_support` and `::zerocopy` absolutely, so both are
+dependencies of your crate:
 
 ```toml
 [dependencies]
 zerocopy = { version = "0.8", features = ["derive"] }
 sbe_support = "0.7"
+```
+
+`mod.rs` re-exports `sbe_support`, so the runtime traits come from one import:
+
+```rust
+use crate::sbe::sbe_support::{Dimension, MessageEncode};
 ```
 
 Schema types are referenced as `crate::types::X`, so expose them at the root:

@@ -46,6 +46,56 @@ code generation for other languages.
 * **Schema reflection:** Generated code surfaces `SINCE_VERSION`,
   `SEMANTIC_TYPE`, field offsets and constraint constants so you can
   reason about compatibility at the call site.
+* **Whole-message types:** `FooRef::parse_message` takes header and body
+  together and rejects a block shorter than the build's layout, so every
+  field is present without a per-field check and each group is a slice
+  walked once.
+* **Extension steps:** `Derivation` runs over the laid-out schema and
+  says what it wants added, so serde support, type mappings and anything
+  else are written outside the generator rather than inside it.
+
+## How it is generated
+
+The generator writes annotated structs; the `#[sbe_gen]` attribute macro
+expands them into builders, encoders, views, constants and layout
+assertions. Generated source is roughly a fifth of what it used to be,
+and reads as the schema rather than as its expansion.
+
+```
+schema.xml
+  |  parse        Schema
+  |  dedupe       DedupedSchema     groups declared twice lifted to groups.rs
+  |  validate     ValidatedSchema   type refs checked
+  |  lower        LoweredSchema     types resolved, reads and nulls decided
+  |  layout       LaidOutSchema     offsets, padding, sizes
+  |  emit         annotated structs
+  v  #[sbe_gen]   builders, encoders, views, constants, layout asserts
+```
+
+```rust
+#[sbe_gen(
+    message,
+    size = 8usize,
+    block_length = 8usize,
+    template_id = 42u32,
+    group(order = 2, name = bids, ty = Bids, dimension = crate::types::groupSize, stride = 12usize),
+)]
+pub struct OrderBook {
+    #[sbe_gen(offset = 0u32, value(ty = "u32", read = "get"), required)]
+    pub seq: crate::types::uInt32,
+}
+```
+
+The attribute is one type, `sbe_gen_meta::Block`, written by the generator
+through `ToTokens` and read by the macro through darling. `cargo expand`
+shows the result.
+
+The workspace is four crates: `sbe_gen` reads the schema and writes the
+structs, `sbe_gen_meta` defines the attribute, `sbe_gen_derive` expands it,
+and `sbe_support` carries the runtime.
+
+See [docs/USAGE.md](docs/USAGE.md) for the generated shape and for writing
+extension steps.
 
 ## Usage
 

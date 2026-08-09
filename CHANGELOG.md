@@ -33,10 +33,13 @@
   schema type.
 
 ### Fixed
-- Group entry structs were sized from their fields rather than the group's
-  declared `blockLength`, so a `&[Entry]` slice strided by `size_of` and read
-  every entry after the first at the wrong offset. Entries now pad to the
-  declared block.
+- Group slices returned wrong data. Entry structs were sized from their fields
+  rather than the group's declared `blockLength`, so a `&[Entry]` strided by
+  `size_of` while the wire strides by `blockLength`. Every entry after the first
+  was read at the wrong offset and decoded to plausible but incorrect values;
+  CME's `NoOrderIDEntries` is 16 bytes on the wire against 12 bytes of fields, so
+  order ids past the first were garbage. Iteration was unaffected, which is why
+  it went unnoticed. Entries now pad to the declared block.
 
 ## 0.7.3
 
