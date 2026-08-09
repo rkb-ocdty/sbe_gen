@@ -293,7 +293,7 @@ impl<'a> Emit<'a> {
 
         let msg_impl = impl_of(quote!(#msg_name), parse_data_methods.collect());
         let builder_impl = impl_of(
-            quote!(#builder_name),
+            quote!(<BUF: ::sbe_support::Buf> #builder_name<BUF>),
             builder_setters.chain(builder_data).collect(),
         );
         let encoder_impl = impl_of(
@@ -390,7 +390,7 @@ impl<'a> Emit<'a> {
 
         let derived_here = || g_fields.iter().filter(|f| !f.setter_is_derivable());
         let entry_builder_setters = field_setters(derived_here(), |offset| {
-            quote! { ::sbe_support::write_bytes_at(self.buf, self.start + #offset, &encoded); }
+            quote! { ::sbe_support::write_bytes_at(&mut *self.buf, self.start + #offset, &encoded); }
         });
         let entry_builder_nested = g_nested.iter().map(|nested| {
             let nested = &nested.group;
@@ -399,7 +399,7 @@ impl<'a> Emit<'a> {
             quote! {
                 pub fn #name<F>(&mut self, f: F) -> Result<&mut Self, ::sbe_support::EncodeError>
                 where
-                    F: FnOnce(&mut #builder),
+                    F: FnOnce(&mut #builder<'_, BUF>),
                 {
                     let mut builder = #builder::new(self.buf);
                     f(&mut builder);
@@ -412,7 +412,7 @@ impl<'a> Emit<'a> {
             let (name, length_ty) = (&d.name, &d.length_ty);
             quote! {
                 pub fn #name(&mut self, bytes: &[u8]) -> Result<&mut Self, ::sbe_support::EncodeError> {
-                    ::sbe_support::write_var_data::<#length_ty>(self.buf, bytes)?;
+                    ::sbe_support::write_var_data::<#length_ty>(&mut *self.buf, bytes)?;
                     Ok(self)
                 }
             }
@@ -448,19 +448,19 @@ impl<'a> Emit<'a> {
             }
         });
 
-        let extra = |ty: &Ident, methods: Vec<TokenStream>| match methods.is_empty() {
+        let extra = |head: TokenStream, methods: Vec<TokenStream>| match methods.is_empty() {
             true => quote!(),
-            false => quote! { impl<'a> #ty<'a> { #(#methods)* } },
+            false => quote! { impl #head { #(#methods)* } },
         };
         let entry_builder_extra = extra(
-            &entry_builder,
+            quote!(<'a, BUF: ::sbe_support::Buf> #entry_builder<'a, BUF>),
             entry_builder_setters
                 .chain(entry_builder_nested)
                 .chain(entry_builder_data)
                 .collect(),
         );
         let entry_encoder_extra = extra(
-            &entry_encoder,
+            quote!(<'a> #entry_encoder<'a>),
             entry_encoder_setters
                 .chain(entry_encoder_nested)
                 .chain(entry_encoder_data)
@@ -511,7 +511,6 @@ fn group_exports(g: &PlacedGroup) -> Vec<Ident> {
     .chain(g.groups.iter().flat_map(group_exports))
     .collect()
 }
-
 
 /// A block's FIX message-type code, when the schema gave it one. An empty string is what the
 /// XML says when it did not, and saying that is worse than saying nothing.
@@ -632,7 +631,10 @@ fn field_meta_attr(f: &PlacedField) -> TokenStream {
             .as_deref()
             .and_then(|s| syn::parse_str(s).ok()),
         optional: f.view.opt_accessor.as_ref().map(|opt| meta::Optional {
-            null: opt.null.as_ref().map(|n| syn::parse_str(&n.to_string()).expect("a sentinel")),
+            null: opt
+                .null
+                .as_ref()
+                .map(|n| syn::parse_str(&n.to_string()).expect("a sentinel")),
             nan: opt.null.is_none(),
         }),
         required: f.view.required && value.is_some(),

@@ -487,10 +487,10 @@ impl<'sc> Types<'sc> {
                 fn parse_header(body: &[u8]) -> Option<(&Self, &[u8])> { Self::parse_prefix(body) }
                 fn count(&self) -> usize { #count }
                 fn block_length(&self) -> usize { #block }
-                fn write_block(buf: &mut Vec<u8>, at: usize, block_length: usize) {
+                fn write_block<B: ::sbe_support::Buf>(buf: &mut B, at: usize, block_length: usize) {
                     ::sbe_support::write_bytes_at(buf, at + core::mem::offset_of!(Self, #block_field), &(#block_value));
                 }
-                fn write_count(buf: &mut Vec<u8>, at: usize, count: usize) {
+                fn write_count<B: ::sbe_support::Buf>(buf: &mut B, at: usize, count: usize) {
                     ::sbe_support::write_bytes_at(buf, at + core::mem::offset_of!(Self, #count_field), &(#count_value));
                 }
                 fn write_block_into(dst: &mut [u8], at: usize, block_length: usize) -> Result<(), ::sbe_support::EncodeIntoError> {

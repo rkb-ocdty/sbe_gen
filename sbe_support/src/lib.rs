@@ -9,7 +9,7 @@ use core::fmt;
 use core::marker::PhantomData;
 
 use zerocopy::byteorder::little_endian::{U16, U32, U64};
-use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout, Ref, Unaligned};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Ref, Unaligned};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncodeIntoError {
@@ -147,8 +147,72 @@ pub fn parse_var_data<'a, T: Length>(buf: &'a [u8]) -> Option<(VarData<'a>, &'a 
     Some((VarData { len, bytes }, tail))
 }
 
+/// The growing buffer a builder appends into.
+///
+/// A trait rather than `Vec<u8>` because the allocator crate is optional: a type parameter is
+/// the only spelling of "a vector, possibly someone else's" that compiles whether or not it is
+/// switched on, and generated code is written once for both.
+pub trait Buf {
+    /// what `new_in` takes. std's `Vec` has no allocator to name, so it takes nothing.
+    type Alloc;
+    fn new_in(alloc: Self::Alloc) -> Self;
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    fn resize_zeroed(&mut self, len: usize);
+    fn extend_from_slice(&mut self, bytes: &[u8]);
+    fn as_slice(&self) -> &[u8];
+    fn as_mut_slice(&mut self) -> &mut [u8];
+}
+
+impl Buf for Vec<u8> {
+    type Alloc = ();
+    fn new_in((): ()) -> Self {
+        Self::new()
+    }
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn resize_zeroed(&mut self, len: usize) {
+        self.resize(len, 0);
+    }
+    fn extend_from_slice(&mut self, bytes: &[u8]) {
+        self.extend_from_slice(bytes);
+    }
+    fn as_slice(&self) -> &[u8] {
+        self
+    }
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        self
+    }
+}
+
+#[cfg(feature = "allocator-api2")]
+impl<A: allocator_api2::alloc::Allocator> Buf for allocator_api2::vec::Vec<u8, A> {
+    type Alloc = A;
+    fn new_in(alloc: A) -> Self {
+        Self::new_in(alloc)
+    }
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn resize_zeroed(&mut self, len: usize) {
+        self.resize(len, 0);
+    }
+    fn extend_from_slice(&mut self, bytes: &[u8]) {
+        self.extend_from_slice(bytes);
+    }
+    fn as_slice(&self) -> &[u8] {
+        self
+    }
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        self
+    }
+}
+
 #[inline]
-pub fn write_var_data<T: Length>(buf: &mut Vec<u8>, bytes: &[u8]) -> Result<(), EncodeError> {
+pub fn write_var_data<T: Length, B: Buf>(buf: &mut B, bytes: &[u8]) -> Result<(), EncodeError> {
     let len = bytes.len();
     if len > T::MAX {
         return Err(EncodeError::LengthOverflow { len, max: T::MAX });
@@ -183,17 +247,17 @@ pub fn write_var_data_into<T: Length>(
 }
 
 #[inline]
-pub fn ensure_len(buf: &mut Vec<u8>, len: usize) {
+pub fn ensure_len<B: Buf>(buf: &mut B, len: usize) {
     if buf.len() < len {
-        buf.resize(len, 0);
+        buf.resize_zeroed(len);
     }
 }
 
 #[inline]
-pub fn write_bytes_at<T: IntoBytes + Immutable>(buf: &mut Vec<u8>, offset: usize, value: &T) {
+pub fn write_bytes_at<T: IntoBytes + Immutable, B: Buf>(buf: &mut B, offset: usize, value: &T) {
     let bytes = value.as_bytes();
     ensure_len(buf, offset + bytes.len());
-    buf[offset..offset + bytes.len()].copy_from_slice(bytes);
+    buf.as_mut_slice()[offset..offset + bytes.len()].copy_from_slice(bytes);
 }
 
 #[inline]
@@ -254,8 +318,8 @@ pub trait Dimension: Sized {
     fn count(&self) -> usize;
     fn block_length(&self) -> usize;
 
-    fn write_block(buf: &mut Vec<u8>, at: usize, block_length: usize);
-    fn write_count(buf: &mut Vec<u8>, at: usize, count: usize);
+    fn write_block<B: Buf>(buf: &mut B, at: usize, block_length: usize);
+    fn write_count<B: Buf>(buf: &mut B, at: usize, count: usize);
     fn write_block_into(
         dst: &mut [u8],
         at: usize,
@@ -319,9 +383,11 @@ pub trait MessageEncode {
 /// The entry type names its own builder and encoder, so the group machinery can make one
 /// without knowing what setters the schema gave it. It is a GAT because the builder borrows
 /// the buffer for each entry, not for the group.
-pub trait GroupEntryBuilder {
-    type Builder<'b>;
-    fn builder(buf: &mut Vec<u8>, start: usize) -> Self::Builder<'_>;
+pub trait GroupEntryBuilder<B: Buf = Vec<u8>> {
+    type Builder<'b>
+    where
+        B: 'b;
+    fn builder(buf: &mut B, start: usize) -> Self::Builder<'_>;
 }
 
 pub trait GroupEntryEncoder {
@@ -334,22 +400,24 @@ pub trait GroupEntryEncoder {
 
 /// Appends a group to a growing `Vec`. Counts entries as they are written and stamps the
 /// number into the header on `finish`, which is the only point the total is known.
-pub struct GroupBuilder<'a, D, E, const BLOCK_LENGTH: usize> {
-    buf: &'a mut Vec<u8>,
+pub struct GroupBuilder<'a, D, E, const BLOCK_LENGTH: usize, B = Vec<u8>> {
+    buf: &'a mut B,
     header_start: usize,
     count: usize,
     overflow: usize,
     entry: PhantomData<(D, E)>,
 }
 
-impl<'a, D: Dimension, E: GroupEntryBuilder, const B: usize> GroupBuilder<'a, D, E, B> {
+impl<'a, D: Dimension, E: GroupEntryBuilder<BUF>, const B: usize, BUF: Buf>
+    GroupBuilder<'a, D, E, B, BUF>
+{
     pub const BLOCK_LENGTH: u16 = B as u16;
     pub const HEADER_SIZE: usize = D::SIZE;
     pub const MAX_COUNT: usize = D::MAX_COUNT;
 
-    pub fn new(buf: &'a mut Vec<u8>) -> Self {
+    pub fn new(buf: &'a mut BUF) -> Self {
         let header_start = buf.len();
-        buf.resize(header_start + D::SIZE, 0);
+        buf.resize_zeroed(header_start + D::SIZE);
         D::write_block(buf, header_start, B);
         D::write_count(buf, header_start, 0);
         Self {
@@ -368,7 +436,7 @@ impl<'a, D: Dimension, E: GroupEntryBuilder, const B: usize> GroupBuilder<'a, D,
             return self;
         }
         let start = self.buf.len();
-        self.buf.resize(start + B, 0);
+        self.buf.resize_zeroed(start + B);
         f(&mut E::builder(self.buf, start));
         self.count += 1;
         self
@@ -692,6 +760,6 @@ pub mod serde_ascii {
 
 /// Padding is not written to JSON, so deserialising has to put something back.
 #[cfg(feature = "serde")]
-pub fn zeroed<T: FromZeros>() -> T {
+pub fn zeroed<T: zerocopy::FromZeros>() -> T {
     T::new_zeroed()
 }

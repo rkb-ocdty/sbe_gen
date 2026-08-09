@@ -8,11 +8,11 @@
 //! being trusted twice.
 
 use darling::{FromField, FromMeta, ast::NestedMeta};
-use sbe_gen_meta::{Block, Constant, Meta};
 use heck::ToSnakeCase;
 use proc_macro::TokenStream as Tokens;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
+use sbe_gen_meta::{Block, Constant, Meta};
 use syn::{Fields, Ident, ItemStruct, Type, parse_macro_input};
 
 /// Turns a packed block declaration into the block, its constants, its builder and its encoder.
@@ -258,8 +258,8 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
             pub type #group_ty<'a> =
                 ::sbe_support::Group<'a, #dimension, #entry_view<'a>, #since, #declared>;
             pub type #iter<'a> = ::sbe_support::GroupIter<'a, #entry_view<'a>>;
-            pub type #group_builder<'a> =
-                ::sbe_support::GroupBuilder<'a, #dimension, #name, #declared>;
+            pub type #group_builder<'a, BUF = Vec<u8>> =
+                ::sbe_support::GroupBuilder<'a, #dimension, #name, #declared, BUF>;
             pub type #group_encoder<'a> =
                 ::sbe_support::GroupEncoder<'a, #dimension, #name, #declared>;
         }
@@ -281,7 +281,7 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
                 quote! {
                     pub fn #name<F>(&mut self, f: F) -> Result<&mut Self, ::sbe_support::EncodeError>
                     where
-                        F: FnOnce(&mut #builder_ty),
+                        F: FnOnce(&mut #builder_ty<'_, BUF>),
                     {
                         let mut builder = #builder_ty::new(&mut self.buf);
                         f(&mut builder);
@@ -713,8 +713,8 @@ fn message_impl(
     group_encoders: Vec<TokenStream>,
 ) -> TokenStream {
     quote! {
-        pub struct #builder {
-            buf: Vec<u8>,
+        pub struct #builder<BUF = Vec<u8>> {
+            buf: BUF,
         }
 
         impl Default for #builder {
@@ -724,14 +724,6 @@ fn message_impl(
         }
 
         impl #builder {
-            pub const BLOCK_LENGTH: u16 = #name::BLOCK_LENGTH;
-            pub const TEMPLATE_ID: u16 = #name::TEMPLATE_ID;
-            pub const SCHEMA_ID: u16 = #name::SCHEMA_ID;
-            pub const SCHEMA_VERSION: u16 = #name::SCHEMA_VERSION;
-
-            #[inline]
-            fn start(&self) -> usize { 0 }
-
             pub fn new() -> Self {
                 Self { buf: vec![0u8; Self::BLOCK_LENGTH as usize] }
             }
@@ -741,11 +733,27 @@ fn message_impl(
                 buf.reserve(capacity);
                 Self { buf }
             }
+        }
+
+        impl<BUF: ::sbe_support::Buf> #builder<BUF> {
+            pub const BLOCK_LENGTH: u16 = #name::BLOCK_LENGTH;
+            pub const TEMPLATE_ID: u16 = #name::TEMPLATE_ID;
+            pub const SCHEMA_ID: u16 = #name::SCHEMA_ID;
+            pub const SCHEMA_VERSION: u16 = #name::SCHEMA_VERSION;
+
+            #[inline]
+            fn start(&self) -> usize { 0 }
+
+            pub fn new_in(alloc: BUF::Alloc) -> Self {
+                let mut buf = BUF::new_in(alloc);
+                buf.resize_zeroed(Self::BLOCK_LENGTH as usize);
+                Self { buf }
+            }
 
             #(#build_setters)*
             #(#group_builders)*
 
-            pub fn finish(self) -> Vec<u8> {
+            pub fn finish(self) -> BUF {
                 self.buf
             }
 
@@ -760,7 +768,7 @@ fn message_impl(
                     self.buf.len() + ::sbe_support::MessageHeader::SIZE,
                 );
                 out.extend_from_slice(&header.to_bytes());
-                out.extend_from_slice(&self.buf);
+                out.extend_from_slice(self.buf.as_slice());
                 out
             }
         }
@@ -831,19 +839,19 @@ fn entry_impl(
     encode_setters: Vec<TokenStream>,
 ) -> TokenStream {
     quote! {
-        pub struct #builder<'a> {
-            buf: &'a mut Vec<u8>,
+        pub struct #builder<'a, BUF: ::sbe_support::Buf = Vec<u8>> {
+            buf: &'a mut BUF,
             start: usize,
         }
 
-        impl ::sbe_support::GroupEntryBuilder for #name {
-            type Builder<'b> = #builder<'b>;
-            fn builder(buf: &mut Vec<u8>, start: usize) -> Self::Builder<'_> {
+        impl<BUF: ::sbe_support::Buf> ::sbe_support::GroupEntryBuilder<BUF> for #name {
+            type Builder<'b> = #builder<'b, BUF> where BUF: 'b;
+            fn builder(buf: &mut BUF, start: usize) -> Self::Builder<'_> {
                 #builder { buf, start }
             }
         }
 
-        impl<'a> #builder<'a> {
+        impl<'a, BUF: ::sbe_support::Buf> #builder<'a, BUF> {
             #[inline]
             fn start(&self) -> usize { self.start }
 

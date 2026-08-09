@@ -179,7 +179,10 @@ mod tests {
         };
         let mut actual = generated.structs[0].clone();
         let is_sbe_gen = |a: &syn::Attribute| {
-            a.path().segments.last().is_some_and(|s| s.ident == "sbe_gen")
+            a.path()
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == "sbe_gen")
         };
         actual.attrs.retain(|a| !is_sbe_gen(a));
         if let syn::Fields::Named(fields) = &mut actual.fields {
