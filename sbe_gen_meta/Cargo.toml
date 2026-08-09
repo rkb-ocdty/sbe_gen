@@ -1,0 +1,12 @@
+[package]
+name = "sbe_gen_meta"
+version = "0.7.3"
+edition = "2024"
+description = "The `#[sbe_gen]` attribute, shared by the generator that writes it and the macro that reads it"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+darling = "0.24"
+syn = { version = "3", features = ["full", "extra-traits"] }
+quote = "1.0.47"
+proc-macro2 = "1.0.107"

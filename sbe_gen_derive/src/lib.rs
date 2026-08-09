@@ -8,171 +8,12 @@
 //! being trusted twice.
 
 use darling::{FromField, FromMeta, ast::NestedMeta};
+use sbe_gen_meta::{Block, Meta, Read};
 use heck::ToSnakeCase;
 use proc_macro::TokenStream as Tokens;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use syn::{Fields, Ident, ItemStruct, Type, parse_macro_input};
-
-/// What the generator hangs on the struct.
-#[derive(Default, FromMeta)]
-#[darling(default)]
-struct Block {
-    /// a message rather than a group entry: its builder owns its `Vec` and can stamp a header
-    message: bool,
-    /// what the struct has to measure, which is asserted rather than trusted
-    size: Option<usize>,
-    /// the block's width on the wire, which the schema can declare wider than the fields need
-    block_length: Option<u16>,
-    template_id: Option<u16>,
-    schema_id: Option<u16>,
-    schema_version: Option<u16>,
-    since_version: Option<u32>,
-    // a string, not a type like the fields': a message's semanticType is a FIX message-type
-    // code, and "0" and "5" are not identifiers
-    semantic_type: Option<String>,
-    /// the repeating groups the block declares, in the order they sit on the wire
-    #[darling(multiple)]
-    group: Vec<GroupSpec>,
-    /// the composite holding this group's count and block length. Present only on a group
-    /// entry, which is what tells one from a message.
-    dimension: Option<syn::Path>,
-    /// the group's accessor name, sanitized by the generator, which a re-casing would not match
-    name: Option<Ident>,
-    /// the variable-length members trailing the block, in wire order
-    #[darling(multiple)]
-    data: Vec<VarData>,
-    /// the fields the schema gave a fixed value
-    #[darling(multiple)]
-    constant: Vec<Constant>,
-}
-
-/// What it hangs on each field. Padding carries only `skip`, which is how it is told apart from
-/// a field the schema declared — that one always knows where it goes.
-#[derive(FromField)]
-#[darling(attributes(sbe_gen))]
-struct Meta {
-    ident: Option<Ident>,
-    ty: Type,
-    /// the generator writes this field's setter itself
-    #[darling(default)]
-    skip: bool,
-    /// the schema's own `offset`, which becomes a constant as well as an assertion
-    offset: Option<u32>,
-    /// where the layout pass put it, when the schema did not say
-    at: Option<usize>,
-    since_version: Option<u32>,
-    semantic_type: Option<syn::Path>,
-    /// what the field reads as, which the value helpers on the view hand back
-    value: Option<Value>,
-    /// present when the schema said the field may be absent
-    optional: Option<Optional>,
-    /// the schema marked it required, so it gets the helper that says so
-    #[darling(default)]
-    required: bool,
-    /// length of the byte array, when the field is one
-    string: Option<usize>,
-    min: Option<String>,
-    max: Option<String>,
-    null: Option<String>,
-    initial: Option<String>,
-}
-
-/// How an optional field reaches its raw integer. A schema type is a newtype over one, a
-/// byteorder wrapper around one, or both.
-#[derive(Default, PartialEq, FromMeta)]
-#[darling(rename_all = "snake_case")]
-enum Read {
-    #[default]
-    Plain,
-    Get,
-    Inner,
-    InnerGet,
-}
-
-/// A repeating group the block carries.
-#[derive(FromMeta)]
-struct GroupSpec {
-    /// where it sits among the block's members, which is the order it sits on the wire
-    order: usize,
-    /// the accessor's name, sanitized by the generator, which a re-casing here would not match
-    name: Ident,
-    /// the group's name, which its entry, view, iterator and builders are all named from
-    ty: Ident,
-    /// the composite holding its count and block length
-    dimension: syn::Path,
-    /// bytes between entries, when every entry is the same width. An entry carrying its own
-    /// groups or var-data has no stride and the group cannot be handed back as a slice.
-    stride: Option<usize>,
-}
-
-/// A field whose value the schema fixed, so it takes no bytes on the wire and is not a member
-/// of the struct at all.
-#[derive(FromMeta)]
-struct Constant {
-    /// the accessor's name
-    name: Ident,
-    /// the constant's own name
-    ident: Ident,
-    ty: Type,
-    value: syn::Expr,
-    #[darling(default)]
-    since_version: u32,
-}
-
-/// A variable-length member: its name and the integer its length is written as.
-#[derive(FromMeta)]
-struct VarData {
-    order: usize,
-    name: Ident,
-    len: Type,
-}
-
-/// What the field hands back once it has been read through whatever wraps it.
-#[derive(FromMeta)]
-struct Value {
-    // a string, because a field's type can be an array and darling parses those from one
-    ty: Type,
-    #[darling(default)]
-    read: Read,
-}
-
-impl Value {
-    /// reaches the raw integer from the field
-    fn tail(&self) -> TokenStream {
-        match self.read {
-            Read::Plain => quote!(),
-            Read::Get => quote!(.get()),
-            Read::Inner => quote!(.0),
-            Read::InnerGet => quote!(.0.get()),
-        }
-    }
-
-    /// an enum or set hands back the wrapper it was read through, a primitive the raw value
-    fn wrapper(&self) -> bool {
-        matches!(self.read, Read::Inner | Read::InnerGet)
-    }
-}
-
-/// Present when the schema said the field may be absent.
-#[derive(FromMeta)]
-struct Optional {
-    /// the sentinel the raw integer holds when the field is absent
-    null: Option<syn::Lit>,
-    /// a float has no sentinel: absence is NaN
-    #[darling(default)]
-    nan: bool,
-}
-
-impl Optional {
-    fn test(&self) -> TokenStream {
-        let null = &self.null;
-        match self.nan {
-            true => quote!(raw.is_nan()),
-            false => quote!(raw == #null),
-        }
-    }
-}
 
 /// Turns a packed block declaration into the block, its constants, its builder and its encoder.
 #[proc_macro_attribute]
@@ -218,7 +59,7 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
         let stem = ident.to_string();
         let stem = stem.trim_end_matches('_').to_string();
 
-        let ty = m.ty;
+        let ty = m.ty.clone();
         if !m.skip {
             written.push((ident.clone(), ty.clone()));
         }
@@ -270,9 +111,9 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
             }
         }
         if let (Some(value), Some(optional)) = (&m.value, &m.optional) {
-            let (ty, tail, null_when) = (&value.ty, value.tail(), optional.test());
-            let bind = value.wrapper().then(|| quote!(let v = self.#ident;));
-            let returned = match value.wrapper() {
+            let (ty, tail, null_when) = (&value.ty, value.read.tail(), optional.test());
+            let bind = value.read.wrapper().then(|| quote!(let v = self.#ident;));
+            let returned = match value.read.wrapper() {
                 true => quote!(v),
                 false => quote!(raw),
             };
@@ -288,7 +129,7 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
         }
 
         if let Some(value) = &m.value {
-            let (ty, tail) = (&value.ty, value.tail());
+            let (ty, tail) = (&value.ty, value.read.tail());
             let value_name = format_ident!("{stem}_value");
             let (ret, read) = match &m.optional {
                 Some(optional) => {

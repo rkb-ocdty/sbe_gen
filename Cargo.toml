@@ -1,5 +1,5 @@
 [workspace]
-members = ["sbe_gen_derive", "sbe_support"]
+members = ["sbe_gen_derive", "sbe_gen_meta", "sbe_support"]
 
 [package]
 name = "sbe_gen"
@@ -22,6 +22,7 @@ prettyplease = "0.3.0"
 strum = { version = "0.28.0", features = ["derive"] }
 derive_more = { version = "2.1.1", features = ["try_unwrap", "is_variant", "deref"] }
 derive_generic_visitor = "1.1.0"
+sbe_gen_meta = { path = "sbe_gen_meta", version = "0.7.3" }
 
 [dev-dependencies]
 tempfile = "3"

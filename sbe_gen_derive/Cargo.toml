@@ -13,4 +13,5 @@ syn = { version = "3", features = ["full"] }
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
 darling = "0.24"
+sbe_gen_meta = { path = "../sbe_gen_meta", version = "0.7.3" }
 heck = "0.5"

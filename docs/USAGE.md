@@ -80,11 +80,136 @@ Note: helper functions such as `parse_with_header` and `parse_<group>`
 are defined in each message module (for example,
 `crate::sbe::heartbeat::parse_with_header`).
 
-Add `zerocopy` to your Cargo.toml because generated modules use it directly:
+Add `zerocopy` and `sbe_support` to your Cargo.toml. Generated modules use both
+directly, and `sbe_support` carries the `#[sbe_gen]` macro.
 
 ```toml
 [dependencies]
 zerocopy = { version = "0.8", features = ["derive"] }
+sbe_support = "0.7"
+```
+
+Schema types are referenced as `crate::types::X`, so expose them at the root:
+
+```rust
+pub mod types {
+    pub use crate::sbe::types::*;
+}
+```
+
+## What a generated message looks like
+
+The generator writes the block as an annotated struct. `#[sbe_gen]` expands it
+into the builder, encoder, view, constants and layout assertions.
+
+```rust
+#[sbe_gen(
+    message,
+    size = 8usize,
+    block_length = 8usize,
+    template_id = 42u32,
+    group(order = 2, name = bids, ty = Bids, dimension = crate::types::groupSize, stride = 12usize),
+    data(order = 3, name = comment, len = U16),
+)]
+pub struct OrderBook {
+    #[sbe_gen(offset = 0u32, value(ty = "u32", read = "get"), required)]
+    pub seq: crate::types::uInt32,
+    #[sbe_gen(offset = 4u32, value(ty = "u32", read = "get"), required)]
+    pub source: crate::types::uInt32,
+}
+```
+
+Everything the macro needs is on the attribute: where a field sits, how its
+value reads, whether it may be absent, and where each group and var-data sits
+among the block's members. `cargo expand` shows the result.
+
+Each message module gets:
+
+| item | what it is |
+| --- | --- |
+| `OrderBook` | the packed block, read straight off the wire |
+| `OrderBookBuilder` | appends into a `Vec<u8>` |
+| `OrderBookEncoder` | writes into a caller's buffer |
+| `OrderBookView` | a parsed block plus the bytes after it |
+| `OrderBookMessage<B, G..>` | the block and its groups together |
+| `OrderBookRef<'a>` / `OrderBookOwned` | borrowed and owned aliases of the above |
+| `parse_with_header`, `parse_<group>` | free functions |
+
+`Ref` is the one to reach for. It takes header and body together, so a message
+that parses is a whole one:
+
+```rust
+let msg = OrderBookRef::parse_message(bytes)?;
+msg.seq.get();        // derefs to the block
+msg.bids;             // &[BidsEntry], walked once at parse
+```
+
+`parse_message` rejects a block shorter than this build's layout, so there is no
+per-field presence check. A group whose entries carry their own groups or
+var-data has no fixed stride and is reached through `parse_<group>` and its
+iterator instead.
+
+## Extension steps
+
+`Derivation` runs over the laid-out schema and says what it wants added. Steps
+are passed to the generator, so an extension needs no change to the generator
+itself.
+
+```rust
+use sbe_gen::{Derivation, PlacedField, generate_to_with};
+use syn::{Field as SynField, parse_quote};
+
+struct Docs;
+
+impl Derivation for Docs {
+    fn field(&self, placed: &PlacedField, field: &mut SynField) -> Result<(), CodegenError> {
+        let note = format!("FIX tag {}", placed.field.id);
+        field.attrs.push(parse_quote!(#[doc = #note]));
+        Ok(())
+    }
+}
+
+generate_to_with(&xml, "src/sbe", &opts, &[&Docs])?;
+```
+
+The hooks:
+
+| hook | reaches |
+| --- | --- |
+| `field` | a field the schema declared |
+| `padding` | the members it did not |
+| `message_struct` | the block |
+| `group_struct` | a group entry |
+| `message` | items appended to the module |
+| `type_items` | enums, sets, composites |
+| `types` | items appended to `types.rs` |
+| `modules` | whole modules of its own |
+
+### serde
+
+`DeriveSerialize` is the worked example. It adds the derives and the field
+attributes that make the wire types readable, and takes per-type and
+per-semantic-type overrides:
+
+```rust
+let serde = DeriveSerialize::default()
+    .map_semantic("UTCTimestamp", "crate::json_types::utc_timestamp");
+
+generate_to_with(&xml, "src/sbe", &opts, &[&serde])?;
+```
+
+```json
+{"TransactTime": "2023-07-16T22:00:00Z", "MDEntryPx": "30500", "NoMDEntries": [...]}
+```
+
+A type that is laid out identically to the schema's own can replace it
+outright, which is a substitution rather than a serialisation:
+
+```rust
+GeneratorOptions {
+    type_map: [("PRICE9".into(), "crate::json_types::Price9".into())].into(),
+    ..Default::default()
+}
 ```
 
 ## Fixed-size message example
