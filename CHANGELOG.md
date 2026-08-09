@@ -2,35 +2,35 @@
 
 ## Unreleased
 
+### Added
+- `<Message>Message<B, G..>` holds a block and its groups, with `<Message>Ref`
+  (borrowed) and `<Message>Owned` aliases. `parse_message` takes header and body
+  together and rejects a block shorter than this build's layout, so every field
+  is present without a per-field presence check and each group is a slice walked
+  once at parse.
+- `Derivation` and the staged schema types are public. Extension steps are
+  passed to `generate_with` / `generate_to_with`, so they can be written outside
+  the crate.
+- `DeriveSerialize`: serde derives and the field attributes the wire types need,
+  with per-type and per-semantic-type overrides.
+- `GeneratorOptions::type_map` substitutes a byte-compatible Rust type for a
+  schema type, so a scaled integer can be read as a decimal with no conversion.
+- Groups declared by more than one message are emitted once into `groups.rs`.
+
 ### Changed
-- Code generation moved into a `#[sbe_gen]` attribute macro (`sbe_gen_derive`).
-  The generator now writes annotated structs and the macro expands them into
-  builders, encoders, views, constants and layout assertions. Generated output
-  is roughly a fifth of its previous size.
-- Runtime support moved to the `sbe_support` crate: `Group`, `GroupIter`,
-  `EntryBody`, `GroupBuilder`, `GroupEncoder`, `Dimension`, `MessageEncode`,
-  `ParsePrefix`. It was previously emitted identically into every module.
-- Schema types are referenced as `crate::types::X`. Consumers must expose
-  `types` at the crate root.
-- `#[repr(C)]` and the zerocopy derives come from the macro rather than
-  appearing in the generated source.
-- `encode_body_into` / `encode_with_header_into` moved to the `MessageEncode`
+- Code generation moved into the `#[sbe_gen]` attribute macro. The generator
+  writes annotated structs and the macro expands them into builders, encoders,
+  views, constants and layout assertions. Generated source is roughly a fifth of
+  its previous size. The workspace is now four crates: `sbe_gen`,
+  `sbe_gen_meta` (the attribute), `sbe_gen_derive` (its expansion) and
+  `sbe_support` (the runtime, previously emitted into every module).
+- Generated modules name `::sbe_support` and `::zerocopy`, which are therefore
+  dependencies of the consuming crate. Schema types are `crate::types::X`, so
+  `types` has to be reachable at the crate root.
+- `encode_body_into` / `encode_with_header_into` are on the `MessageEncode`
   trait.
 - Group entry views no longer carry accessors for constant fields; the value is
-  on the entry struct as an associated constant.
-
-### Added
-- `<Message>Message<B, G..>` holding a block and its groups, with `<Message>Ref`
-  (borrowed) and `<Message>Owned` aliases. `parse_message` takes the header and
-  body together and rejects a block shorter than this build's layout, so every
-  field is present without a per-field check.
-- Groups declared by more than one message are emitted once into `groups.rs`.
-- `Derivation` and the staged schema types are public, so extension steps can be
-  written outside the crate and passed to `generate_with` / `generate_to_with`.
-- `DeriveSerialize`: serde derives and field attributes, with per-type and
-  per-semantic-type mapping.
-- `GeneratorOptions::type_map` substitutes a byte-compatible Rust type for a
-  schema type.
+  an associated constant on the entry struct.
 
 ### Fixed
 - Group slices returned wrong data. Entry structs were sized from their fields
