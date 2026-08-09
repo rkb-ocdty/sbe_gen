@@ -64,13 +64,13 @@ impl DeriveSerialize {
 }
 
 impl Derivation for DeriveSerialize {
-
     fn message_struct(
         &self,
         _msg: &PlacedMessage,
         item: &mut ItemStruct,
     ) -> Result<(), CodegenError> {
-        item.attrs.push(parse_quote!(#[derive(serde::Serialize, serde::Deserialize)]));
+        item.attrs
+            .push(parse_quote!(#[derive(serde::Serialize, serde::Deserialize)]));
         Ok(())
     }
 
@@ -79,7 +79,8 @@ impl Derivation for DeriveSerialize {
         _group: &PlacedGroup,
         item: &mut ItemStruct,
     ) -> Result<(), CodegenError> {
-        item.attrs.push(parse_quote!(#[derive(serde::Serialize, serde::Deserialize)]));
+        item.attrs
+            .push(parse_quote!(#[derive(serde::Serialize, serde::Deserialize)]));
         Ok(())
     }
 
@@ -103,7 +104,9 @@ impl Derivation for DeriveSerialize {
             return Ok(TokenStream::new());
         }
         let ty = format_ident!("{}Message", msg.names.msg);
-        let params: Vec<Ident> = (0..msg.groups.len()).map(|i| format_ident!("G{i}")).collect();
+        let params: Vec<Ident> = (0..msg.groups.len())
+            .map(|i| format_ident!("G{i}"))
+            .collect();
         let names: Vec<Ident> = msg
             .groups
             .iter()
@@ -164,9 +167,9 @@ impl Derivation for DeriveSerialize {
     fn field(&self, placed: &PlacedField, field: &mut SynField) -> Result<(), CodegenError> {
         let name = placed.field.name.to_string();
         field.attrs.push(parse_quote!(#[serde(rename = #name)]));
-        if let Some(path) = self.writer(placed) { field
-        .attrs
-        .push(parse_quote!(#[serde(with = #path)])) }
+        if let Some(path) = self.writer(placed) {
+            field.attrs.push(parse_quote!(#[serde(with = #path)]))
+        }
         Ok(())
     }
 
@@ -177,7 +180,8 @@ impl Derivation for DeriveSerialize {
         const WIRE: [&str; 8] = ["u8", "i8", "U16", "U32", "U64", "I16", "I32", "I64"];
         for item in items {
             let Item::Struct(s) = item else { continue };
-            s.attrs.push(parse_quote!(#[derive(serde::Serialize, serde::Deserialize)]));
+            s.attrs
+                .push(parse_quote!(#[derive(serde::Serialize, serde::Deserialize)]));
             for field in &mut s.fields {
                 let ty = field.ty.to_token_stream().to_string();
                 let with = match () {
@@ -186,9 +190,7 @@ impl Derivation for DeriveSerialize {
                     _ => None,
                 };
                 if let Some(path) = with {
-                    field
-                        .attrs
-                        .push(parse_quote!(#[serde(with = #path)]));
+                    field.attrs.push(parse_quote!(#[serde(with = #path)]));
                 }
             }
         }

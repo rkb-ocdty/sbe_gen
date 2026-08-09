@@ -87,7 +87,12 @@ mod tests {
         names.sort();
         assert_eq!(
             names,
-            ["NoEvents", "NoInstAttrib", "NoLotTypeRules", "NoMDFeedTypes"]
+            [
+                "NoEvents",
+                "NoInstAttrib",
+                "NoLotTypeRules",
+                "NoMDFeedTypes"
+            ]
         );
 
         // the three NoMDEntries hold different fields, so none of them is shared

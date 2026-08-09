@@ -113,7 +113,6 @@ impl Emit<'_> {
         self.derivations.iter().map(|d| d.message(msg)).collect()
     }
 
-
     pub(crate) fn derived_modules(&self) -> Result<Vec<GeneratedModule>, CodegenError> {
         Ok(self
             .derivations
@@ -158,7 +157,8 @@ mod tests {
         let opts: &'static GeneratorOptions = Box::leak(Box::default());
         let schema = crate::parser::parse_schema(xml).unwrap();
         let laid_out = LaidOutSchema::new(
-            LoweredSchema::new(ValidatedSchema::new(DedupedSchema::new(schema), opts).unwrap()).unwrap(),
+            LoweredSchema::new(ValidatedSchema::new(DedupedSchema::new(schema), opts).unwrap())
+                .unwrap(),
         )
         .unwrap();
 

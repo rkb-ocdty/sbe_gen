@@ -14,7 +14,6 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use syn::{Fields, Ident, ItemStruct, Type, parse_macro_input};
 
-
 /// What the generator hangs on the struct.
 #[derive(Default, FromMeta)]
 #[darling(default)]
@@ -38,6 +37,8 @@ struct Block {
     /// the composite holding this group's count and block length. Present only on a group
     /// entry, which is what tells one from a message.
     dimension: Option<syn::Path>,
+    /// the group's accessor name, sanitized by the generator, which a re-casing would not match
+    name: Option<Ident>,
     /// the variable-length members trailing the block, in wire order
     #[darling(multiple)]
     data: Vec<VarData>,
@@ -482,13 +483,7 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
         let groups: Vec<_> = block
             .group
             .iter()
-            .map(|g| {
-                (
-                    g.name.clone(),
-                    format_ident!("{}Entry", g.ty),
-                    g,
-                )
-            })
+            .map(|g| (g.name.clone(), format_ident!("{}Entry", g.ty), g))
             .collect();
         let params: Vec<Ident> = (0..groups.len()).map(|i| format_ident!("G{i}")).collect();
         let members = groups
@@ -670,7 +665,14 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
     // message it still answers `has_`, because the schema can add a constant in a later
     // version and an older writer will not have known about it.
     let mut constant_items = TokenStream::new();
-    for Constant { name, ident, ty, value, since_version } in &block.constant {
+    for Constant {
+        name,
+        ident,
+        ty,
+        value,
+        since_version,
+    } in &block.constant
+    {
         constant_items.extend(quote! {
             pub const #ident: #ty = #value;
             #[inline]
@@ -705,7 +707,14 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
             group_builders,
             group_encoders,
         ),
-        false => entry_impl(&name, &builder, &encoder, &fixed_len, build_setters, encode_setters),
+        false => entry_impl(
+            &name,
+            &builder,
+            &encoder,
+            &fixed_len,
+            build_setters,
+            encode_setters,
+        ),
     };
 
     // A group whose entries are all the same width is a contiguous array on the wire, so the
@@ -749,21 +758,25 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
         }
     }
 
-    let fixed_layout = block.message.then(|| quote! {
-        #[inline]
-        pub fn is_fixed_layout(&self) -> bool {
-            self.acting_version >= #name::SCHEMA_VERSION
-                && self.acting_block_length >= core::mem::size_of::<#name>()
+    let fixed_layout = block.message.then(|| {
+        quote! {
+            #[inline]
+            pub fn is_fixed_layout(&self) -> bool {
+                self.acting_version >= #name::SCHEMA_VERSION
+                    && self.acting_block_length >= core::mem::size_of::<#name>()
+            }
         }
     });
-    let view_impl = (!accessors.is_empty() || fixed_layout.is_some() || !slices.is_empty())
-        .then(|| quote! {
-        impl<'a> #view<'a> {
-            #fixed_layout
-            #accessors
-            #slices
-        }
-    });
+    let view_impl =
+        (!accessors.is_empty() || fixed_layout.is_some() || !slices.is_empty()).then(|| {
+            quote! {
+                impl<'a> #view<'a> {
+                    #fixed_layout
+                    #accessors
+                    #slices
+                }
+            }
+        });
 
     let wire = block
         .block_length

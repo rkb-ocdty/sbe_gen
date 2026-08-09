@@ -355,12 +355,7 @@ impl<'sc> Types<'sc> {
                 } => {
                     if *presence == Presence::Constant {
                         if let Some(val) = constant {
-                            const_fields.push((
-                                fname.clone(),
-                                *primitive,
-                                *length,
-                                val.clone(),
-                            ));
+                            const_fields.push((fname.clone(), *primitive, *length, val.clone()));
                         }
                         continue;
                     }

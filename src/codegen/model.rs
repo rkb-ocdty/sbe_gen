@@ -161,8 +161,6 @@ pub(crate) fn local_path(name: &str) -> Path {
     parse_quote!(#ident)
 }
 
-
-
 /// Inside a message module the schema types live one level up.
 /// A schema type, from the crate root. Absolute, so it reads the same at any depth in the
 /// generated tree.

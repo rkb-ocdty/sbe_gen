@@ -983,7 +983,12 @@ mod dedupe_tests {
         assert_eq!(total, 19, "top-level groups in the CME schema");
         assert_eq!(distinct.len(), 11, "distinct group definitions");
 
-        for name in ["NoEvents", "NoMDFeedTypes", "NoInstAttrib", "NoLotTypeRules"] {
+        for name in [
+            "NoEvents",
+            "NoMDFeedTypes",
+            "NoInstAttrib",
+            "NoLotTypeRules",
+        ] {
             let shared: Vec<_> = schema
                 .messages
                 .iter()

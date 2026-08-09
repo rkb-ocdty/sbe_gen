@@ -23,8 +23,7 @@ use std::path::Path;
 use thiserror::Error;
 
 /// Options that influence how code is generated.
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct GeneratorOptions {
     /// Optional crate-level allow attribute line (e.g. `#![allow(...)]`).
     /// When set, it is inserted at the top of each generated file.
@@ -37,7 +36,6 @@ pub struct GeneratorOptions {
     /// the wire, not converted.
     pub type_map: HashMap<String, String>,
 }
-
 
 /// Errors produced by the generator.
 #[derive(Debug, Error)]

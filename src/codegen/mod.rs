@@ -415,7 +415,11 @@ pub(crate) fn check_collisions(
             Item::Enum(e) => {
                 declared.push(("module scope".into(), e.ident.to_string()));
                 let scope = format!("enum {}", e.ident);
-                declared.extend(e.variants.iter().map(|v| (scope.clone(), v.ident.to_string())));
+                declared.extend(
+                    e.variants
+                        .iter()
+                        .map(|v| (scope.clone(), v.ident.to_string())),
+                );
             }
             Item::Type(t) => declared.push(("module scope".into(), t.ident.to_string())),
             // `const _` is the layout assertion; every one of them is called `_` and none of
@@ -433,7 +437,10 @@ pub(crate) fn check_collisions(
                         path.to_token_stream(),
                         base_name(&i.self_ty.to_token_stream().to_string())
                     ),
-                    None => format!("impl {}", base_name(&i.self_ty.to_token_stream().to_string())),
+                    None => format!(
+                        "impl {}",
+                        base_name(&i.self_ty.to_token_stream().to_string())
+                    ),
                 };
                 declared.extend(i.items.iter().filter_map(|member| {
                     Some((
@@ -467,7 +474,8 @@ pub(crate) fn check_collisions(
                 .any(|end| !line[end..].starts_with(|c: char| c.is_alphanumeric() || c == '_'))
         };
         let context = rendered
-            .lines().rfind(declares)
+            .lines()
+            .rfind(declares)
             .or_else(|| rendered.lines().find(|l| l.contains(&name)))
             .map(|line| format!("\n  --> {}", line.trim()))
             .unwrap_or_default();

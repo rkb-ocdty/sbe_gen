@@ -210,8 +210,6 @@ pub struct DataLayout {
     pub length_ty: Type,
 }
 
-
-
 /// A lowered schema with every field given its place in the fixed block.
 ///
 /// This pass answers *where does it sit*, and it is the only pass that talks about bytes. It

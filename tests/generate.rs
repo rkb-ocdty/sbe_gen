@@ -503,9 +503,7 @@ fn parse_fallback_uses_borrowed_raw_slices_without_heap_allocations() {
 
     assert!(msg_rs.contains("#[sbe_gen(\n    message,"));
     assert!(msg_rs.contains("dimension = "));
-    assert!(msg_rs.contains(
-        "offset = 0u32"
-    ));
+    assert!(msg_rs.contains("offset = 0u32"));
     assert!(msg_rs.contains("size = 8usize"));
     assert!(!msg_rs.contains("Owned(Vec<u8>)"));
     assert!(!msg_rs.contains("vec![0u8; needed]"));
@@ -567,9 +565,7 @@ fn generates_borrowed_encode_into_api() {
         .expect("negotiate500.rs emitted");
     // Negotiate500Encoder comes off the struct now
     assert!(msg_rs.contains("#[sbe_gen(\n    message,"));
-    assert!(msg_rs.contains(
-        "MessageEncode, ParsePrefix"
-    ));
+    assert!(msg_rs.contains("MessageEncode, ParsePrefix"));
     // both are sbe_support::MessageEncode's, provided off the three items the macro writes
     assert!(msg_rs.contains("MessageEncode"));
     assert!(!msg_rs.contains("does not support group encoding"));
@@ -662,19 +658,18 @@ fn view_generates_fallback_value_required_enum_composite_and_string_helpers() {
         .collect();
     let def_rs = module_map.get("def.rs").expect("def.rs emitted");
 
-    assert!(def_rs.contains(
-        "MessageEncode, ParsePrefix"
-    ));
+    assert!(def_rs.contains("MessageEncode, ParsePrefix"));
     assert!(def_rs.contains("#[sbe_gen(\n    message,"));
     assert!(def_rs.contains("semantic_type = String"));
     // the plain getter is the macro's now; the value helper is still the generator's
     assert!(def_rs.contains("pub security_update_action: crate::types::SecurityUpdateAction"));
     // the value helper is the macro's, off this field's own read
-    assert!(def_rs.contains(r#"value(ty = "crate :: types :: SecurityUpdateAction", read = "plain")"#));
+    assert!(
+        def_rs.contains(r#"value(ty = "crate :: types :: SecurityUpdateAction", read = "plain")"#)
+    );
     assert!(def_rs.contains("required"));
     // the string helpers are the macro's, off the array length
     assert!(def_rs.contains("string = 6usize"));
-
 
     assert!(def_rs.contains("optional(null = 4294967295)"));
     assert!(

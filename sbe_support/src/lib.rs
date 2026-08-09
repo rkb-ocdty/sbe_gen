@@ -256,8 +256,11 @@ pub trait Dimension: Sized {
 
     fn write_block(buf: &mut Vec<u8>, at: usize, block_length: usize);
     fn write_count(buf: &mut Vec<u8>, at: usize, count: usize);
-    fn write_block_into(dst: &mut [u8], at: usize, block_length: usize)
-    -> Result<(), EncodeIntoError>;
+    fn write_block_into(
+        dst: &mut [u8],
+        at: usize,
+        block_length: usize,
+    ) -> Result<(), EncodeIntoError>;
     fn write_count_into(dst: &mut [u8], at: usize, count: usize) -> Result<(), EncodeIntoError>;
 }
 

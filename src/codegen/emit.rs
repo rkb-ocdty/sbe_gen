@@ -151,7 +151,9 @@ impl<'a> Emit<'a> {
         });
         let shared = match self.schema.shared.is_empty() {
             true => quote!(),
-            false => quote!(pub mod groups;),
+            false => quote!(
+                pub mod groups;
+            ),
         };
         quote! {
             pub mod types;
@@ -237,8 +239,6 @@ impl<'a> Emit<'a> {
         self.derive_message_struct(lowered, &mut msg_struct)?;
         self.structs.borrow_mut().push(msg_struct.clone());
 
-
-
         let parse_data_methods = data_layout.iter().map(|d| {
             let (fn_name, length_ty) = (&d.parse_fn, &d.length_ty);
             quote! {
@@ -294,10 +294,7 @@ impl<'a> Emit<'a> {
             }
         });
 
-        let msg_impl = impl_of(
-            quote!(#msg_name),
-            parse_data_methods.collect(),
-        );
+        let msg_impl = impl_of(quote!(#msg_name), parse_data_methods.collect());
         let builder_impl = impl_of(
             quote!(#builder_name),
             builder_setters.chain(builder_data).collect(),
@@ -346,10 +343,9 @@ impl<'a> Emit<'a> {
         let entry_encoder = g.entry_encoder();
 
         let g_block_length = *g_block_length;
-        
+
         let g_since = g.since_version.unwrap_or(0);
         let g_semantic = semantic(g.semantic_type.as_deref());
-
 
         let (group_at, data_at) = member_order(g.members.iter().map(|m| match m {
             GroupMember::Group(_) => Some(true),
@@ -397,7 +393,6 @@ impl<'a> Emit<'a> {
         self.structs.borrow_mut().push(entry_struct_item.clone());
 
         let entry_view_impl = quote!();
-
 
         let derived_here = || g_fields.iter().filter(|f| !f.setter_is_derivable());
         let entry_builder_setters = field_setters(derived_here(), |offset| {
@@ -575,8 +570,8 @@ fn group_keys(groups: &[PlacedGroup], order: &[usize]) -> TokenStream {
         .map(|(g, order)| {
             let (ty, dimension) = (g.group.name.type_ident(), g.dimension.clone());
             let name = g.group.name.snake_ident();
-            let stride =
-                (g.data.is_empty() && g.groups.is_empty()).then(|| g.struct_size.max(g.block_length));
+            let stride = (g.data.is_empty() && g.groups.is_empty())
+                .then(|| g.struct_size.max(g.block_length));
             let stride = stride.map(|s| quote!(stride = #s,));
             quote!(group(order = #order, name = #name, ty = #ty, dimension = #dimension, #stride),)
         })
@@ -623,7 +618,6 @@ fn member_order(kinds: impl Iterator<Item = Option<bool>>) -> (Vec<usize>, Vec<u
     }
     (groups, data)
 }
-
 
 /// The schema's numbers for one field, hung on it so the macro can write its constants and
 /// check its place against what the struct compiled to.
