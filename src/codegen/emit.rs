@@ -93,8 +93,7 @@ impl<'a> Emit<'a> {
                 items.extend(self.visit_group(g)?);
             }
         }
-        let preamble = module_preamble();
-        Ok((!items.is_empty()).then(|| quote! { #preamble #items }))
+        Ok((!items.is_empty()).then_some(items))
     }
 
     /// The members of the packed struct: each field that occupies bytes, behind the padding the
@@ -176,9 +175,6 @@ impl<'a> Emit<'a> {
             composites,
         } = Types::new(self.schema, self.schema.opts, self.derivations).collect()?;
         Ok(quote! {
-            use zerocopy::{Ref, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned};
-            use zerocopy::byteorder::little_endian::*;
-
             #(#primitives)*
             #(#enums)*
             #(#sets)*
@@ -221,7 +217,7 @@ impl<'a> Emit<'a> {
         let mut msg_struct: ItemStruct = {
             let struct_fields = self.visit_fields(fields)?;
             parse_quote! {
-                #[sbe_gen(
+                #[::sbe_support::sbe_gen(
                     message,
                     #msg_groups
                     #msg_data
@@ -244,7 +240,7 @@ impl<'a> Emit<'a> {
             let (fn_name, length_ty) = (&d.parse_fn, &d.length_ty);
             quote! {
                 #[inline]
-                pub fn #fn_name<'a>(&self, buf: &'a [u8]) -> Option<(VarData<'a>, &'a [u8])> {
+                pub fn #fn_name<'a>(&self, buf: &'a [u8]) -> Option<(::sbe_support::VarData<'a>, &'a [u8])> {
                     parse_var_data::<#length_ty>(buf)
                 }
             }
@@ -257,7 +253,7 @@ impl<'a> Emit<'a> {
         let builder_data = data_layout.iter().map(|d| {
             let (name, length_ty) = (&d.name, &d.length_ty);
             quote! {
-                pub fn #name(&mut self, bytes: &[u8]) -> Result<&mut Self, EncodeError> {
+                pub fn #name(&mut self, bytes: &[u8]) -> Result<&mut Self, ::sbe_support::EncodeError> {
                     write_var_data::<#length_ty>(&mut self.buf, bytes)?;
                     Ok(self)
                 }
@@ -289,7 +285,7 @@ impl<'a> Emit<'a> {
             let (fn_name, length_ty) = (&d.parse_fn, &d.length_ty);
             quote! {
                 #[inline]
-                pub fn #fn_name<'b>(&self, buf: &'b [u8]) -> Option<(VarData<'b>, &'b [u8])> {
+                pub fn #fn_name<'b>(&self, buf: &'b [u8]) -> Option<(::sbe_support::VarData<'b>, &'b [u8])> {
                     parse_var_data::<#length_ty>(buf)
                 }
             }
@@ -309,10 +305,7 @@ impl<'a> Emit<'a> {
             view_fields.chain(view_data_methods).collect(),
         );
 
-        let preamble = module_preamble();
         Ok(quote! {
-            #preamble
-
             #msg_struct
 
             #msg_impl
@@ -376,7 +369,7 @@ impl<'a> Emit<'a> {
                 quote! { #pad, }
             });
             parse_quote! {
-                #[sbe_gen(
+                #[::sbe_support::sbe_gen(
                     size = #entry_block_size,
                     block_length = #g_block_length,
                     dimension = #dimension,
@@ -404,7 +397,7 @@ impl<'a> Emit<'a> {
             let name = nested.name.snake_ident();
             let builder = format_ident!("{}GroupBuilder", nested.name.type_ident());
             quote! {
-                pub fn #name<F>(&mut self, f: F) -> Result<&mut Self, EncodeError>
+                pub fn #name<F>(&mut self, f: F) -> Result<&mut Self, ::sbe_support::EncodeError>
                 where
                     F: FnOnce(&mut #builder),
                 {
@@ -418,7 +411,7 @@ impl<'a> Emit<'a> {
         let entry_builder_data = g_data_layout.iter().map(|d| {
             let (name, length_ty) = (&d.name, &d.length_ty);
             quote! {
-                pub fn #name(&mut self, bytes: &[u8]) -> Result<&mut Self, EncodeError> {
+                pub fn #name(&mut self, bytes: &[u8]) -> Result<&mut Self, ::sbe_support::EncodeError> {
                     write_var_data::<#length_ty>(self.buf, bytes)?;
                     Ok(self)
                 }
@@ -494,21 +487,6 @@ impl<'a> Emit<'a> {
 
             #nested_items
         })
-    }
-}
-
-/// what a module full of generated views needs in scope
-fn module_preamble() -> TokenStream {
-    quote! {
-        use zerocopy::{Ref, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned};
-        use zerocopy::byteorder::little_endian::*;
-        // re-exported so the module's public surface is unchanged by these living in the
-        // support crate rather than being emitted into every module
-        pub use sbe_support::{
-                DecodeFieldError, EncodeError, EncodeIntoError, MessageEncode, ParsePrefix, VarData,
-            };
-        #[allow(unused_imports)]
-        use sbe_support::*;
     }
 }
 

@@ -4,7 +4,7 @@ pub(crate) fn parse_prefix_method() -> TokenStream {
     quote! {
         #[inline]
         pub fn parse_prefix(body: &[u8]) -> Option<(&Self, &[u8])> {
-            Ref::<_, Self>::from_prefix(body).ok().map(|(r, b)| (Ref::into_ref(r), b))
+            ::sbe_support::parse_prefix(body)
         }
     }
 }
@@ -319,7 +319,7 @@ impl Resolved {
 
     pub(crate) fn u8_array_len(&self) -> Option<usize> {
         match self {
-            Self::Array(inner, len) if inner.primitive()?.rust() == "u8" => Some(*len),
+            Self::Array(inner, len) if inner.primitive()?.host() == "u8" => Some(*len),
             _ => None,
         }
     }

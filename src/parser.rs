@@ -402,8 +402,19 @@ macro_rules! primitives {
         pub enum Primitive { $($variant),+ }
 
         impl Primitive {
-            pub fn rust(self) -> Ident {
-                match self { $(Self::$variant => format_ident!(stringify!($rust))),+ }
+            /// the type a field of this primitive is written as. A one-byte primitive is
+            /// itself; anything wider goes through zerocopy's little-endian wrapper, which is
+            /// exactly the rows whose wire type and host type are spelled differently.
+            pub fn rust(self) -> syn::Path {
+                match self {
+                    $(Self::$variant => {
+                        let ident = format_ident!(stringify!($rust));
+                        match stringify!($rust) == stringify!($host) {
+                            true => syn::parse_quote!(#ident),
+                            false => syn::parse_quote!(::zerocopy::byteorder::little_endian::#ident),
+                        }
+                    }),+
+                }
             }
             pub fn size(self) -> usize {
                 match self { $(Self::$variant => $size),+ }

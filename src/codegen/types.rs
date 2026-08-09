@@ -204,7 +204,7 @@ impl<'sc> Types<'sc> {
         self.out.enums.extend(items(quote! {
             #doc
             #[repr(transparent)]
-            #[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy, PartialEq, Eq)]
+            #[derive(Debug, ::zerocopy::FromBytes, ::zerocopy::IntoBytes, ::zerocopy::KnownLayout, ::zerocopy::Immutable, ::zerocopy::Unaligned, Clone, Copy, PartialEq, Eq)]
             pub struct #enum_ty(pub #rust_ty);
             impl #enum_ty { #parse_prefix }
         }));
@@ -300,7 +300,7 @@ impl<'sc> Types<'sc> {
         self.out.sets.extend(items(quote! {
             #doc
             #[repr(transparent)]
-            #[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy, PartialEq, Eq)]
+            #[derive(Debug, ::zerocopy::FromBytes, ::zerocopy::IntoBytes, ::zerocopy::KnownLayout, ::zerocopy::Immutable, ::zerocopy::Unaligned, Clone, Copy, PartialEq, Eq)]
             pub struct #set_ty(pub #rust_ty);
             impl #set_ty { #parse_prefix }
         }));
@@ -423,7 +423,7 @@ impl<'sc> Types<'sc> {
         self.out.composites.extend(items(quote! {
             #doc
             #[repr(C)]
-            #[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]
+            #[derive(Debug, ::zerocopy::FromBytes, ::zerocopy::IntoBytes, ::zerocopy::KnownLayout, ::zerocopy::Immutable, ::zerocopy::Unaligned, Clone, Copy)]
             #[derive(PartialEq, Eq)]
             pub struct #composite_ty { #struct_fields }
             impl #composite_ty { #parse_prefix }
