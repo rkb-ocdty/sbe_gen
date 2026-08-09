@@ -63,7 +63,7 @@ pub struct FieldView {
     /// the inner type when the value is itself an `Option`, which `_required` unwraps twice
     pub nullable_inner: Option<TokenStream>,
     /// how `#[sbe_gen]` reaches the value, when the macro has a spelling for this shape
-    pub value_read: Option<Read>,
+    pub value_read: Option<sbe_gen_meta::Read>,
     /// the enum a `_enum` helper returns, when the field is an enum with values
     pub as_enum: Option<Path>,
     /// the field's type is a newtype over its encoding rather than an alias to it
@@ -79,26 +79,6 @@ pub struct FieldView {
     pub const_name: Ident,
     /// the `_opt` accessor's ingredients, when the field qualifies for one
     pub opt_accessor: Option<OptAccessor>,
-}
-
-/// How a value is reached through whatever the schema's type wraps it in.
-#[derive(Clone, Copy, PartialEq)]
-pub enum Read {
-    Plain,
-    Get,
-    Inner,
-    InnerGet,
-}
-
-impl Read {
-    pub(crate) fn key(self) -> &'static str {
-        match self {
-            Self::Plain => "plain",
-            Self::Get => "get",
-            Self::Inner => "inner",
-            Self::InnerGet => "inner_get",
-        }
-    }
 }
 
 /// An `_opt` accessor reads a field, compares it against its null and hands back either the
@@ -259,7 +239,7 @@ fn field_view(
     // is decided here rather than recovered from `value_expr` later: the expression is tokens,
     // and matching on how they happen to print is a silent break waiting for a reformat.
     let (value_ty, value_expr, nullable_inner, value_read) = 'value: {
-        let plain = |ty: TokenStream| (ty, quote!(*value), None, Some(Read::Plain));
+        let plain = |ty: TokenStream| (ty, quote!(*value), None, Some(sbe_gen_meta::Read::Plain));
         if matches!(resolved, Resolved::Array(..)) {
             break 'value plain(resolved.to_token_stream());
         }
@@ -298,8 +278,8 @@ fn field_view(
                 );
             }
             let read = match Resolved::Scalar(prim).is_wrapped() {
-                true => Read::Get,
-                false => Read::Plain,
+                true => sbe_gen_meta::Read::Get,
+                false => sbe_gen_meta::Read::Plain,
             };
             break 'value (host, raw, None, Some(read));
         }

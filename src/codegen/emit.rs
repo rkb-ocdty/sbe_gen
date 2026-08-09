@@ -534,13 +534,6 @@ fn group_exports(g: &PlacedGroup) -> Vec<Ident> {
     .collect()
 }
 
-/// How the view hands a non-optional field back. The type is the schema's own where it named
-/// one, and the read is whatever the wire type wraps it in.
-fn value_key(f: &PlacedField) -> Option<TokenStream> {
-    let ty = f.view.value_ty.to_string();
-    let read = f.view.value_read?.key();
-    Some(quote!(value(ty = #ty, read = #read)))
-}
 
 /// A block's FIX message-type code, when the schema gave it one. An empty string is what the
 /// XML says when it did not, and saying that is worse than saying nothing.
@@ -661,7 +654,7 @@ fn field_meta_attr(f: &PlacedField) -> TokenStream {
             .as_deref()
             .and_then(|s| syn::parse_str(s).ok()),
         optional: f.view.opt_accessor.as_ref().map(|opt| meta::Optional {
-            null: opt.null.as_ref().map(|n| syn::parse_str(&n.to_string()).expect("a literal")),
+            null: opt.null.as_ref().map(|n| syn::parse_str(&n.to_string()).expect("a sentinel")),
             nan: opt.null.is_none(),
         }),
         required: f.view.required && value.is_some(),
