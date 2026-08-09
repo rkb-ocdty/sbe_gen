@@ -183,10 +183,15 @@ impl Derivation for DeriveSerialize {
             s.attrs
                 .push(parse_quote!(#[derive(serde::Serialize, serde::Deserialize)]));
             for field in &mut s.fields {
-                let ty = field.ty.to_token_stream().to_string();
-                let with = match () {
-                    _ if WIRE.contains(&ty.as_str()) => Some("sbe_support::serde_wire"),
-                    _ if ty.starts_with("[u8 ;") => Some("sbe_support::serde_ascii"),
+                let last = match &field.ty {
+                    Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+                    _ => None,
+                };
+                let with = match &field.ty {
+                    _ if last.as_deref().is_some_and(|t| WIRE.contains(&t)) => {
+                        Some("sbe_support::serde_wire")
+                    }
+                    Type::Array(_) => Some("sbe_support::serde_ascii"),
                     _ => None,
                 };
                 if let Some(path) = with {
