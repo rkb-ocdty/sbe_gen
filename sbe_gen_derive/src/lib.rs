@@ -8,7 +8,7 @@
 //! being trusted twice.
 
 use darling::{FromField, FromMeta, ast::NestedMeta};
-use sbe_gen_meta::{Block, Meta, Read};
+use sbe_gen_meta::{Block, Constant, Meta};
 use heck::ToSnakeCase;
 use proc_macro::TokenStream as Tokens;
 use proc_macro2::TokenStream;

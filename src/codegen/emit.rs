@@ -1,5 +1,6 @@
 use super::*;
 use crate::{Generated, GeneratedModule};
+use sbe_gen_meta as meta;
 
 /// Stage 5. Walks the laid-out schema and renders each node into a module.
 ///
@@ -622,63 +623,56 @@ fn member_order(kinds: impl Iterator<Item = Option<bool>>) -> (Vec<usize>, Vec<u
 /// The schema's numbers for one field, hung on it so the macro can write its constants and
 /// check its place against what the struct compiled to.
 fn field_meta_attr(f: &PlacedField) -> TokenStream {
-    let mut keys = Vec::new();
-    if !f.setter_is_derivable() {
-        keys.push(quote!(skip));
-    }
-    match (f.field.offset, f.at()) {
-        (Some(offset), _) => keys.push(quote!(offset = #offset)),
-        (None, Some((at, _))) => keys.push(quote!(at = #at)),
-        (None, None) => {}
-    }
-    if let Some(since) = f.field.since_version.filter(|v| *v != 0) {
-        keys.push(quote!(since_version = #since));
-    }
-    if let Some(semantic) = f
-        .field
-        .semantic_type
-        .as_deref()
-        .and_then(|s| syn::parse_str::<Path>(s).ok())
-    {
-        keys.push(quote!(semantic_type = #semantic));
-    }
-    for (key, value) in [
-        ("min", &f.field.min_value),
-        ("max", &f.field.max_value),
-        ("null", &f.field.null_value),
-        ("initial", &f.field.initial_value),
-    ] {
-        if let Some(value) = value {
-            let key = format_ident!("{key}");
-            keys.push(quote!(#key = #value));
-        }
-    }
-    if let Some(opt) = &f.view.opt_accessor {
-        let ty = &opt.ret_ty;
-        let read = match (opt.wrapper, opt.get) {
-            (false, false) => Read::Plain,
-            (false, true) => Read::Get,
-            (true, false) => Read::Inner,
-            (true, true) => Read::InnerGet,
-        }
-        .key();
-        let null = match &opt.null {
-            Some(sentinel) => quote!(null = #sentinel),
-            None => quote!(nan),
-        };
-        let ty = ty.to_string();
-        keys.push(quote!(value(ty = #ty, read = #read)));
-        keys.push(quote!(optional(#null)));
-    } else if let Some(value) = value_key(f) {
-        keys.push(value);
-    }
-    if f.view.required && f.value_is_derived() {
-        keys.push(quote!(required));
-    }
-    if let Some(len) = f.view.fixed_string {
-        keys.push(quote!(string = #len));
-    }
-    quote!(#[sbe_gen(#(#keys),*)])
+    let (offset, at) = match (f.field.offset, f.at()) {
+        (Some(offset), _) => (Some(offset), None),
+        (None, Some((at, _))) => (None, Some(at)),
+        (None, None) => (None, None),
+    };
+    let value = f.view.opt_accessor.as_ref().map_or_else(
+        || {
+            f.view.value_read.map(|read| meta::Value {
+                ty: syn::parse_str(&f.view.value_ty.to_string()).expect("a rendered type"),
+                read,
+            })
+        },
+        |opt| {
+            Some(meta::Value {
+                ty: syn::parse_str(&opt.ret_ty.to_string()).expect("a rendered type"),
+                read: match (opt.wrapper, opt.get) {
+                    (false, false) => meta::Read::Plain,
+                    (false, true) => meta::Read::Get,
+                    (true, false) => meta::Read::Inner,
+                    (true, true) => meta::Read::InnerGet,
+                },
+            })
+        },
+    );
+    let meta = meta::Meta {
+        ident: None,
+        ty: f.ty.clone(),
+        skip: !f.setter_is_derivable(),
+        padding: false,
+        offset,
+        at,
+        since_version: f.field.since_version,
+        semantic_type: f
+            .field
+            .semantic_type
+            .as_deref()
+            .and_then(|s| syn::parse_str(s).ok()),
+        optional: f.view.opt_accessor.as_ref().map(|opt| meta::Optional {
+            null: opt.null.as_ref().map(|n| syn::parse_str(&n.to_string()).expect("a literal")),
+            nan: opt.null.is_none(),
+        }),
+        required: f.view.required && value.is_some(),
+        string: f.view.fixed_string,
+        value,
+        min: f.field.min_value.clone(),
+        max: f.field.max_value.clone(),
+        null: f.field.null_value.clone(),
+        initial: f.field.initial_value.clone(),
+    };
+    quote!(#[sbe_gen(#meta)])
 }
 
 pub(crate) fn field_setters<'a>(
