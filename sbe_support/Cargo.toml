@@ -9,8 +9,7 @@ license = "MIT OR Apache-2.0"
 sbe_gen_derive = { path = "../sbe_gen_derive", version = "0.7.3" }
 zerocopy = { version = "0.8", features = ["derive"] }
 serde = { version = "1", optional = true }
-allocator-api2 = { version = "0.4.0", optional = true }
+allocator-api2 = "0.4.0"
 
 [features]
 serde = ["dep:serde"]
-allocator-api2 = ["dep:allocator-api2"]
