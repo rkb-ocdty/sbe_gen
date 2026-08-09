@@ -178,10 +178,13 @@ mod tests {
             }
         };
         let mut actual = generated.structs[0].clone();
-        actual.attrs.retain(|a| !a.path().is_ident("sbe_gen"));
+        let is_sbe_gen = |a: &syn::Attribute| {
+            a.path().segments.last().is_some_and(|s| s.ident == "sbe_gen")
+        };
+        actual.attrs.retain(|a| !is_sbe_gen(a));
         if let syn::Fields::Named(fields) = &mut actual.fields {
             for field in &mut fields.named {
-                field.attrs.retain(|a| !a.path().is_ident("sbe_gen"));
+                field.attrs.retain(|a| !is_sbe_gen(a));
             }
         }
         assert_eq!(actual, expected);
