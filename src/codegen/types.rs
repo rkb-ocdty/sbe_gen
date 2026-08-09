@@ -481,23 +481,23 @@ impl<'sc> Types<'sc> {
         let block_value = dim.block_field_ty.count_value(quote!(block_length));
         let count_value = dim.count_field_ty.count_value(quote!(count));
         Some(quote! {
-            impl sbe_support::Dimension for #ty {
+            impl ::sbe_support::Dimension for #ty {
                 const SIZE: usize = core::mem::size_of::<Self>();
                 const MAX_COUNT: usize = #max_count;
                 fn parse_header(body: &[u8]) -> Option<(&Self, &[u8])> { Self::parse_prefix(body) }
                 fn count(&self) -> usize { #count }
                 fn block_length(&self) -> usize { #block }
                 fn write_block(buf: &mut Vec<u8>, at: usize, block_length: usize) {
-                    sbe_support::write_bytes_at(buf, at + core::mem::offset_of!(Self, #block_field), &(#block_value));
+                    ::sbe_support::write_bytes_at(buf, at + core::mem::offset_of!(Self, #block_field), &(#block_value));
                 }
                 fn write_count(buf: &mut Vec<u8>, at: usize, count: usize) {
-                    sbe_support::write_bytes_at(buf, at + core::mem::offset_of!(Self, #count_field), &(#count_value));
+                    ::sbe_support::write_bytes_at(buf, at + core::mem::offset_of!(Self, #count_field), &(#count_value));
                 }
-                fn write_block_into(dst: &mut [u8], at: usize, block_length: usize) -> Result<(), sbe_support::EncodeIntoError> {
-                    sbe_support::write_bytes_into(dst, at + core::mem::offset_of!(Self, #block_field), &(#block_value))
+                fn write_block_into(dst: &mut [u8], at: usize, block_length: usize) -> Result<(), ::sbe_support::EncodeIntoError> {
+                    ::sbe_support::write_bytes_into(dst, at + core::mem::offset_of!(Self, #block_field), &(#block_value))
                 }
-                fn write_count_into(dst: &mut [u8], at: usize, count: usize) -> Result<(), sbe_support::EncodeIntoError> {
-                    sbe_support::write_bytes_into(dst, at + core::mem::offset_of!(Self, #count_field), &(#count_value))
+                fn write_count_into(dst: &mut [u8], at: usize, count: usize) -> Result<(), ::sbe_support::EncodeIntoError> {
+                    ::sbe_support::write_bytes_into(dst, at + core::mem::offset_of!(Self, #count_field), &(#count_value))
                 }
             }
         })

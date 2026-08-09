@@ -50,7 +50,7 @@ impl<'a> Emit<'a> {
             message_header: self.module(
                 "message_header.rs".to_string(),
                 &[],
-                quote! { pub use sbe_support::MessageHeader; },
+                quote! { pub use ::sbe_support::MessageHeader; },
             )?,
             groups: self
                 .visit_shared_groups()?
@@ -161,7 +161,7 @@ impl<'a> Emit<'a> {
             #shared
             #(pub mod #modules;)*
 
-            pub use sbe_support::{self, MessageHeader};
+            pub use ::sbe_support::{self, MessageHeader};
             #(#reexports)*
         }
     }
@@ -241,33 +241,33 @@ impl<'a> Emit<'a> {
             quote! {
                 #[inline]
                 pub fn #fn_name<'a>(&self, buf: &'a [u8]) -> Option<(::sbe_support::VarData<'a>, &'a [u8])> {
-                    parse_var_data::<#length_ty>(buf)
+                    ::sbe_support::parse_var_data::<#length_ty>(buf)
                 }
             }
         });
 
         let plain_left = || fields.iter().filter(|f| !f.setter_is_derivable());
         let builder_setters = field_setters(plain_left(), |offset| {
-            quote! { write_bytes_at(&mut self.buf, #offset, &encoded); }
+            quote! { ::sbe_support::write_bytes_at(&mut self.buf, #offset, &encoded); }
         });
         let builder_data = data_layout.iter().map(|d| {
             let (name, length_ty) = (&d.name, &d.length_ty);
             quote! {
                 pub fn #name(&mut self, bytes: &[u8]) -> Result<&mut Self, ::sbe_support::EncodeError> {
-                    write_var_data::<#length_ty>(&mut self.buf, bytes)?;
+                    ::sbe_support::write_var_data::<#length_ty>(&mut self.buf, bytes)?;
                     Ok(self)
                 }
             }
         });
 
         let encoder_setters = field_setters(plain_left(), |offset| {
-            quote! { write_bytes_into_in_bounds(self.buf, #offset, &encoded); }
+            quote! { ::sbe_support::write_bytes_into_in_bounds(self.buf, #offset, &encoded); }
         });
         let encoder_data = data_layout.iter().map(|d| {
             let (name, length_ty) = (&d.name, &d.length_ty);
             quote! {
-                pub fn #name(&mut self, bytes: &[u8]) -> Result<&mut Self, EncodeIntoError> {
-                    let written = write_var_data_into::<#length_ty>(self.buf, self.used, bytes)?;
+                pub fn #name(&mut self, bytes: &[u8]) -> Result<&mut Self, ::sbe_support::EncodeIntoError> {
+                    let written = ::sbe_support::write_var_data_into::<#length_ty>(self.buf, self.used, bytes)?;
                     self.used += written;
                     Ok(self)
                 }
@@ -286,7 +286,7 @@ impl<'a> Emit<'a> {
             quote! {
                 #[inline]
                 pub fn #fn_name<'b>(&self, buf: &'b [u8]) -> Option<(::sbe_support::VarData<'b>, &'b [u8])> {
-                    parse_var_data::<#length_ty>(buf)
+                    ::sbe_support::parse_var_data::<#length_ty>(buf)
                 }
             }
         });
@@ -390,7 +390,7 @@ impl<'a> Emit<'a> {
 
         let derived_here = || g_fields.iter().filter(|f| !f.setter_is_derivable());
         let entry_builder_setters = field_setters(derived_here(), |offset| {
-            quote! { write_bytes_at(self.buf, self.start + #offset, &encoded); }
+            quote! { ::sbe_support::write_bytes_at(self.buf, self.start + #offset, &encoded); }
         });
         let entry_builder_nested = g_nested.iter().map(|nested| {
             let nested = &nested.group;
@@ -412,23 +412,23 @@ impl<'a> Emit<'a> {
             let (name, length_ty) = (&d.name, &d.length_ty);
             quote! {
                 pub fn #name(&mut self, bytes: &[u8]) -> Result<&mut Self, ::sbe_support::EncodeError> {
-                    write_var_data::<#length_ty>(self.buf, bytes)?;
+                    ::sbe_support::write_var_data::<#length_ty>(self.buf, bytes)?;
                     Ok(self)
                 }
             }
         });
 
         let entry_encoder_setters = field_setters(derived_here(), |offset| {
-            quote! { write_bytes_into_in_bounds(self.buf, self.start + #offset, &encoded); }
+            quote! { ::sbe_support::write_bytes_into_in_bounds(self.buf, self.start + #offset, &encoded); }
         });
         let entry_encoder_nested = g_nested.iter().map(|nested| {
             let nested = &nested.group;
             let name = nested.name.snake_ident();
             let encoder = format_ident!("{}GroupEncoder", nested.name.type_ident());
             quote! {
-                pub fn #name<F>(&mut self, f: F) -> Result<&mut Self, EncodeIntoError>
+                pub fn #name<F>(&mut self, f: F) -> Result<&mut Self, ::sbe_support::EncodeIntoError>
                 where
-                    F: FnOnce(&mut #encoder<'_>) -> Result<(), EncodeIntoError>,
+                    F: FnOnce(&mut #encoder<'_>) -> Result<(), ::sbe_support::EncodeIntoError>,
                 {
                     let mut encoder = #encoder::new(self.buf, self.cursor)?;
                     f(&mut encoder)?;
@@ -440,8 +440,8 @@ impl<'a> Emit<'a> {
         let entry_encoder_data = g_data_layout.iter().map(|d| {
             let (name, length_ty) = (&d.name, &d.length_ty);
             quote! {
-                pub fn #name(&mut self, bytes: &[u8]) -> Result<&mut Self, EncodeIntoError> {
-                    let written = write_var_data_into::<#length_ty>(self.buf, self.cursor, bytes)?;
+                pub fn #name(&mut self, bytes: &[u8]) -> Result<&mut Self, ::sbe_support::EncodeIntoError> {
+                    let written = ::sbe_support::write_var_data_into::<#length_ty>(self.buf, self.cursor, bytes)?;
                     self.cursor += written;
                     Ok(self)
                 }

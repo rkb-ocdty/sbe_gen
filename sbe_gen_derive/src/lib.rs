@@ -676,7 +676,7 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
         }
 
         impl #name {
-            // sbe_support::ParsePrefix provides this for anything blanket, but callers had it
+            // ::sbe_support::ParsePrefix provides this for anything blanket, but callers had it
             // as an inherent method and an inherent method is what they still resolve to
             #[inline]
             pub fn parse_prefix(body: &[u8]) -> Option<(&Self, &[u8])> {
