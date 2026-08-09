@@ -220,7 +220,13 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
             })
             .collect::<Vec<_>>()
     };
-    let build_setters = setters(quote!(&mut self.buf), quote!(write_bytes_at));
+    // a message builder owns its buffer, an entry builder holds a &mut to its parent's, and
+    // reborrowing is the difference between passing the buffer and passing a reference to one
+    let build_buf = match block.message {
+        true => quote!(&mut self.buf),
+        false => quote!(&mut *self.buf),
+    };
+    let build_setters = setters(build_buf, quote!(write_bytes_at));
     let encode_setters = setters(quote!(self.buf), quote!(write_bytes_into_in_bounds));
 
     let fixed_len = match (block.block_length, block.size) {
@@ -258,8 +264,8 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
             pub type #group_ty<'a> =
                 ::sbe_support::Group<'a, #dimension, #entry_view<'a>, #since, #declared>;
             pub type #iter<'a> = ::sbe_support::GroupIter<'a, #entry_view<'a>>;
-            pub type #group_builder<'a, BUF = Vec<u8>> =
-                ::sbe_support::GroupBuilder<'a, #dimension, #name, #declared, BUF>;
+            pub type #group_builder<'a, A = ::sbe_support::Global> =
+                ::sbe_support::GroupBuilder<'a, #dimension, #name, #declared, A>;
             pub type #group_encoder<'a> =
                 ::sbe_support::GroupEncoder<'a, #dimension, #name, #declared>;
         }
@@ -281,7 +287,7 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
                 quote! {
                     pub fn #name<F>(&mut self, f: F) -> Result<&mut Self, ::sbe_support::EncodeError>
                     where
-                        F: FnOnce(&mut #builder_ty<'_, BUF>),
+                        F: FnOnce(&mut #builder_ty<'_, A>),
                     {
                         let mut builder = #builder_ty::new(&mut self.buf);
                         f(&mut builder);
@@ -713,8 +719,8 @@ fn message_impl(
     group_encoders: Vec<TokenStream>,
 ) -> TokenStream {
     quote! {
-        pub struct #builder<BUF = Vec<u8>> {
-            buf: BUF,
+        pub struct #builder<A: ::sbe_support::Allocator = ::sbe_support::Global> {
+            buf: ::sbe_support::Vec<u8, A>,
         }
 
         impl Default for #builder {
@@ -725,17 +731,17 @@ fn message_impl(
 
         impl #builder {
             pub fn new() -> Self {
-                Self { buf: vec![0u8; Self::BLOCK_LENGTH as usize] }
+                Self::new_in(::sbe_support::Global)
             }
 
             pub fn with_capacity(capacity: usize) -> Self {
-                let mut buf = vec![0u8; Self::BLOCK_LENGTH as usize];
-                buf.reserve(capacity);
-                Self { buf }
+                let mut this = Self::new();
+                this.buf.reserve(capacity);
+                this
             }
         }
 
-        impl<BUF: ::sbe_support::Buf> #builder<BUF> {
+        impl<A: ::sbe_support::Allocator> #builder<A> {
             pub const BLOCK_LENGTH: u16 = #name::BLOCK_LENGTH;
             pub const TEMPLATE_ID: u16 = #name::TEMPLATE_ID;
             pub const SCHEMA_ID: u16 = #name::SCHEMA_ID;
@@ -744,16 +750,16 @@ fn message_impl(
             #[inline]
             fn start(&self) -> usize { 0 }
 
-            pub fn new_in(alloc: BUF::Alloc) -> Self {
-                let mut buf = BUF::new_in(alloc);
-                buf.resize_zeroed(Self::BLOCK_LENGTH as usize);
+            pub fn new_in(alloc: A) -> Self {
+                let mut buf = ::sbe_support::Vec::new_in(alloc);
+                buf.resize(Self::BLOCK_LENGTH as usize, 0);
                 Self { buf }
             }
 
             #(#build_setters)*
             #(#group_builders)*
 
-            pub fn finish(self) -> BUF {
+            pub fn finish(self) -> ::sbe_support::Vec<u8, A> {
                 self.buf
             }
 
@@ -768,7 +774,7 @@ fn message_impl(
                     self.buf.len() + ::sbe_support::MessageHeader::SIZE,
                 );
                 out.extend_from_slice(&header.to_bytes());
-                out.extend_from_slice(self.buf.as_slice());
+                out.extend_from_slice(&self.buf);
                 out
             }
         }
@@ -839,19 +845,19 @@ fn entry_impl(
     encode_setters: Vec<TokenStream>,
 ) -> TokenStream {
     quote! {
-        pub struct #builder<'a, BUF: ::sbe_support::Buf = Vec<u8>> {
-            buf: &'a mut BUF,
+        pub struct #builder<'a, A: ::sbe_support::Allocator = ::sbe_support::Global> {
+            buf: &'a mut ::sbe_support::Vec<u8, A>,
             start: usize,
         }
 
-        impl<BUF: ::sbe_support::Buf> ::sbe_support::GroupEntryBuilder<BUF> for #name {
-            type Builder<'b> = #builder<'b, BUF> where BUF: 'b;
-            fn builder(buf: &mut BUF, start: usize) -> Self::Builder<'_> {
+        impl<A: ::sbe_support::Allocator> ::sbe_support::GroupEntryBuilder<A> for #name {
+            type Builder<'b> = #builder<'b, A> where A: 'b;
+            fn builder(buf: &mut ::sbe_support::Vec<u8, A>, start: usize) -> Self::Builder<'_> {
                 #builder { buf, start }
             }
         }
 
-        impl<'a, BUF: ::sbe_support::Buf> #builder<'a, BUF> {
+        impl<'a, A: ::sbe_support::Allocator> #builder<'a, A> {
             #[inline]
             fn start(&self) -> usize { self.start }
 

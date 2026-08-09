@@ -293,7 +293,7 @@ impl<'a> Emit<'a> {
 
         let msg_impl = impl_of(quote!(#msg_name), parse_data_methods.collect());
         let builder_impl = impl_of(
-            quote!(<BUF: ::sbe_support::Buf> #builder_name<BUF>),
+            quote!(<A: ::sbe_support::Allocator> #builder_name<A>),
             builder_setters.chain(builder_data).collect(),
         );
         let encoder_impl = impl_of(
@@ -399,7 +399,7 @@ impl<'a> Emit<'a> {
             quote! {
                 pub fn #name<F>(&mut self, f: F) -> Result<&mut Self, ::sbe_support::EncodeError>
                 where
-                    F: FnOnce(&mut #builder<'_, BUF>),
+                    F: FnOnce(&mut #builder<'_, A>),
                 {
                     let mut builder = #builder::new(self.buf);
                     f(&mut builder);
@@ -453,7 +453,7 @@ impl<'a> Emit<'a> {
             false => quote! { impl #head { #(#methods)* } },
         };
         let entry_builder_extra = extra(
-            quote!(<'a, BUF: ::sbe_support::Buf> #entry_builder<'a, BUF>),
+            quote!(<'a, A: ::sbe_support::Allocator> #entry_builder<'a, A>),
             entry_builder_setters
                 .chain(entry_builder_nested)
                 .chain(entry_builder_data)
