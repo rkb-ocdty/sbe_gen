@@ -234,16 +234,11 @@ GeneratorOptions {
 ### Generated Rust (excerpt)
 
 ```rust
-use zerocopy::{Ref, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned};
-use zerocopy::byteorder::little_endian::*;
-use crate::types::*;
-use crate::message_header::MessageHeader;
-
 #[repr(C)]
-#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]
+#[derive(Debug, ::zerocopy::FromBytes, ::zerocopy::IntoBytes, ::zerocopy::KnownLayout, ::zerocopy::Immutable, ::zerocopy::Unaligned, Clone, Copy)]
 pub struct Heartbeat {
-    pub seq: U32,
-    pub sending_time: U64,
+    pub seq: ::zerocopy::byteorder::little_endian::U32,
+    pub sending_time: ::zerocopy::byteorder::little_endian::U64,
 }
 
 impl Heartbeat {
@@ -297,7 +292,18 @@ builder.sending_time(1_700_000_000);
 
 let framed = builder.finish_with_header(); // Vec<u8>, header + body
 // or if you only need the body:
-let body = builder.finish(); // Vec<u8>
+let body = builder.finish(); // sbe_support::Vec<u8>, derefs to [u8]
+```
+
+The buffer is `sbe_support::Vec`, re-exported from `allocator_api2`: `Vec<u8, A>`
+with `A` defaulting to `Global`. `new_in` takes the allocator instead, so a
+message can be built in an arena and the bytes are the same either way:
+
+```rust
+let arena = bumpalo::Bump::new();
+let mut builder = HeartbeatBuilder::new_in(&arena);
+builder.seq(42);
+let body = builder.finish(); // Vec<u8, &Bump>
 ```
 
 Encode directly into caller-owned memory (no allocation in the hot path):
@@ -434,7 +440,7 @@ builder.levels(|levels| {
 builder.raw(b"payload").expect("raw");
 
 let framed = builder.finish_with_header(); // Vec<u8>, header + body
-let body = builder.finish(); // Vec<u8>
+let body = builder.finish(); // sbe_support::Vec<u8>
 ```
 
 ## Header-aware decoding (acting version)

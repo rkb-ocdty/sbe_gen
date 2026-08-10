@@ -161,12 +161,11 @@ pub(crate) fn local_path(name: &str) -> Path {
     parse_quote!(#ident)
 }
 
-/// Inside a message module the schema types live one level up.
-/// A schema type, from the crate root. Absolute, so it reads the same at any depth in the
-/// generated tree.
+/// Inside a message module the schema types live one level up. Relative, so several schemas can
+/// be mounted in one crate without each one needing a `crate::types` shim to itself.
 pub(crate) fn schema_path(name: &str) -> Path {
     let ident = name.type_ident();
-    parse_quote!(crate::types::#ident)
+    parse_quote!(super::types::#ident)
 }
 
 pub(crate) fn resolve_message_type(name: &str, schema: &Schema) -> Option<Resolved> {

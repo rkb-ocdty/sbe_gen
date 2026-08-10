@@ -8,6 +8,9 @@ license = "MIT OR Apache-2.0"
 [lib]
 proc-macro = true
 
+[features]
+offset_asserts = []
+
 [dependencies]
 syn = { version = "3", features = ["full"] }
 proc-macro2 = "1.0.107"

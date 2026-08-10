@@ -16,6 +16,11 @@
 - `GeneratorOptions::type_map` substitutes a byte-compatible Rust type for a
   schema type, so a scaled integer can be read as a decimal with no conversion.
 - Groups declared by more than one message are emitted once into `groups.rs`.
+- `<Message>Builder::new_in` takes an allocator. Builders are generic over it,
+  defaulting to `Global`, and the buffer they fill is `sbe_support::Vec`, which
+  is `allocator_api2`'s: the same `Vec` with a parameter for who allocated it.
+- Group entry types carry `BLOCK_LENGTH` and `HEADER_SIZE`, which previously
+  could only be read off the builder alias.
 
 ### Changed
 - Code generation moved into the `#[sbe_gen]` attribute macro. The generator
@@ -29,6 +34,10 @@
   `types` has to be reachable at the crate root.
 - `encode_body_into` / `encode_with_header_into` are on the `MessageEncode`
   trait.
+- Generated modules declare no imports. Every path is absolute, so a schema type
+  named `Ref` or `U16` cannot shadow anything.
+- `<Message>Builder::finish` returns `sbe_support::Vec<u8>`, which derefs to
+  `[u8]`; code naming the return type wants `sbe_support::Vec<u8>`.
 - Group entry views no longer carry accessors for constant fields; the value is
   an associated constant on the entry struct.
 

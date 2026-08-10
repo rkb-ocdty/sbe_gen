@@ -172,9 +172,9 @@ mod tests {
             pub struct Quote {
                 #[serde(rename = "price")]
                 #[serde(with = "sbe_support::serde_wire")]
-                pub price: crate::types::Price,
+                pub price: super::types::Price,
                 #[serde(rename = "qty")]
-                pub qty: crate::types::Qty,
+                pub qty: super::types::Qty,
             }
         };
         let mut actual = generated.structs[0].clone();

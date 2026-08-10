@@ -37,7 +37,7 @@ fn generates_basic_schema() {
     let order_rs = module_map.get("order.rs").expect("order.rs emitted");
     assert!(order_rs.contains("pub struct Order"));
     assert!(order_rs.contains("pub id: ::zerocopy::byteorder::little_endian::U64"));
-    assert!(order_rs.contains("pub side: crate::types::Side"));
+    assert!(order_rs.contains("pub side: super::types::Side"));
     assert!(order_rs.contains("#[sbe_gen("));
 }
 
@@ -244,15 +244,15 @@ fn generates_groups_and_var_data() {
         .collect();
 
     let book_rs = module_map.get("book.rs").expect("book.rs emitted");
-    assert!(book_rs.contains("dimension = crate::types::groupSize"));
-    assert!(book_rs.contains("dimension = crate::types::groupSize"));
+    assert!(book_rs.contains("dimension = super::types::groupSize"));
+    assert!(book_rs.contains("dimension = super::types::groupSize"));
     assert!(book_rs.contains("pub struct LevelsEntry"));
     assert!(book_rs.contains("pub struct LevelsEntry"));
     assert!(book_rs.contains("VarData<'a>"));
     assert!(book_rs.contains("pub fn parse_raw"));
     // prettyplease wraps the arguments, so the alias is matched a piece at a time
     assert!(book_rs.contains("ty = Levels,"));
-    assert!(book_rs.contains("crate::types::groupSize,"));
+    assert!(book_rs.contains("super::types::groupSize,"));
     assert!(book_rs.contains("pub struct LevelsEntry"));
     // the type lives in sbe_support, but the module stays as a re-export because consumers
     // import it by path
@@ -295,8 +295,8 @@ fn generates_8_byte_aligned_group_size_composites() {
     assert!(types_rs.contains("pub num_in_group: u8"));
     // where the two members sit is the dimension's own business now, so it is asserted there
     assert!(types_rs.contains("core::mem::offset_of!(Self, num_in_group)"));
-    assert!(counted_rs.contains("dimension = crate::types::groupSize8Byte"));
-    assert!(counted_rs.contains("crate::types::groupSize8Byte,"));
+    assert!(counted_rs.contains("dimension = super::types::groupSize8Byte"));
+    assert!(counted_rs.contains("super::types::groupSize8Byte,"));
     assert!(types_rs.contains("impl ::sbe_support::Dimension for groupSize8Byte"));
 }
 
@@ -658,10 +658,10 @@ fn view_generates_fallback_value_required_enum_composite_and_string_helpers() {
     assert!(def_rs.contains("#[::sbe_support::sbe_gen(\n    message,"));
     assert!(def_rs.contains("semantic_type = String"));
     // the plain getter is the macro's now; the value helper is still the generator's
-    assert!(def_rs.contains("pub security_update_action: crate::types::SecurityUpdateAction"));
+    assert!(def_rs.contains("pub security_update_action: super::types::SecurityUpdateAction"));
     // the value helper is the macro's, off this field's own read
     assert!(
-        def_rs.contains(r#"value(ty = "crate :: types :: SecurityUpdateAction", read = "plain")"#)
+        def_rs.contains(r#"value(ty = "super :: types :: SecurityUpdateAction", read = "plain")"#)
     );
     assert!(def_rs.contains("required"));
     // the string helpers are the macro's, off the array length
@@ -727,9 +727,9 @@ fn message_modules_use_qualified_schema_types() {
         .collect();
     let order_rs = module_map.get("order.rs").expect("order.rs emitted");
 
-    assert!(!order_rs.contains("use crate::types::*;"));
+    assert!(!order_rs.contains("use super::types::*;"));
     // the setter is the derive's, off this declaration, so the qualified path has to be here
-    assert!(order_rs.contains("pub hdr: crate::types::MessageHeader"));
+    assert!(order_rs.contains("pub hdr: super::types::MessageHeader"));
     // parse_with_header is the macro's, off the message marker
     assert!(order_rs.contains("#[::sbe_support::sbe_gen(\n    message,"));
 }

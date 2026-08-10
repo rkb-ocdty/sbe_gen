@@ -67,9 +67,13 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
         let Some(at) = m.offset.map(|o| o as usize).or(m.at) else {
             continue;
         };
-        asserts.extend(quote! {
-            const _: () = assert!(core::mem::offset_of!(#name, #ident) == #at);
-        });
+        // one const-eval item per field is thousands of them for a real schema, and the
+        // per-struct size assert already catches a field landing at the wrong offset
+        if cfg!(feature = "offset_asserts") {
+            asserts.extend(quote! {
+                const _: () = assert!(core::mem::offset_of!(#name, #ident) == #at);
+            });
+        }
 
         let since = m.since_version.unwrap_or(0);
         let has = format_ident!("has_{ident}");

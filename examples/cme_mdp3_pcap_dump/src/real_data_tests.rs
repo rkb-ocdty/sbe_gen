@@ -90,7 +90,7 @@ fn rebuild_payload<B: AsRef<[u8]>>(
     let mut rebuilt = Vec::with_capacity(mem::size_of::<CmePacketHdr>() + msg_len);
     rebuilt.extend_from_slice(pkt_hdr.as_bytes());
     rebuilt.extend_from_slice(cme_hdr.as_bytes());
-    rebuilt.extend_from_slice(&rebuilt_body);
+    rebuilt.extend_from_slice(rebuilt_body);
 
     assert_eq!(rebuilt, payload);
 }
@@ -732,6 +732,8 @@ fn whole_message_to_json() {
     ))
     .unwrap();
 
+    let v = whole.no_md_entries;
+
     assert_eq!(whole.no_md_entries[0].md_entry_px.get(), fpdec!(30500));
 
     assert_eq!(
@@ -768,7 +770,7 @@ fn json_roundtrips_through_the_owned_message() {
     let json = serde_json::to_string(&borrowed).expect("to json");
     let owned: trade_summary::MDIncrementalRefreshTradeSummary48Owned =
         serde_json::from_str(&json).expect("from json");
-
+    
     assert_eq!(owned.block, *borrowed.block);
     assert_eq!(owned.no_md_entries, borrowed.no_md_entries);
     assert_eq!(owned.no_order_id_entries, borrowed.no_order_id_entries);

@@ -140,14 +140,11 @@ message header like:
 the generator produces the following Rust code:
 
 ```rust
-use zerocopy::{Ref, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned};
-use zerocopy::byteorder::little_endian::{U32, U64};
-
 #[repr(C)]
-#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]
+#[derive(Debug, ::zerocopy::FromBytes, ::zerocopy::IntoBytes, ::zerocopy::KnownLayout, ::zerocopy::Immutable, ::zerocopy::Unaligned, Clone, Copy)]
 pub struct PacketHdr {
-    pub seq: U32,
-    pub sending_time: U64,
+    pub seq: ::zerocopy::byteorder::little_endian::U32,
+    pub sending_time: ::zerocopy::byteorder::little_endian::U64,
 }
 
 impl PacketHdr {

@@ -13,3 +13,4 @@ allocator-api2 = "0.4.0"
 
 [features]
 serde = ["dep:serde"]
+offset_asserts = ["sbe_gen_derive/offset_asserts"]
