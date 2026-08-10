@@ -15,8 +15,9 @@ pub type Dec9 = ConstScaleFpdec<i64, 9>;
 /// while the decimal is align 8, and handing out a reference to one would be misaligned. The
 /// bytes are the same, the references are not.
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned,
+)]
 pub struct Price9(pub I64);
 
 impl Price9 {

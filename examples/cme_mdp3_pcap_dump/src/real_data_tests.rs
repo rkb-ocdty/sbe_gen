@@ -74,7 +74,10 @@ fn group_entry_len(block_length: u16, declared: usize) -> usize {
     }
 }
 
-fn rebuild_payload(payload: &[u8], rebuild_body: impl FnOnce(&MessageHeader, &[u8]) -> Vec<u8>) {
+fn rebuild_payload(
+    payload: &[u8],
+    rebuild_body: impl FnOnce(&MessageHeader, &[u8]) -> sbe_support::Vec<u8>,
+) {
     let (pkt_hdr, msg_hdr, body) = parse_single_message(payload);
     let rebuilt_body = rebuild_body(&msg_hdr, body);
     let msg_len = mem::size_of::<CmeMessageHeader>() + rebuilt_body.len();
@@ -203,7 +206,7 @@ fn template_48_trade_summary() {
     let after_entries = iter.remainder();
     let order_entries =
         trade_summary::parse_no_order_id_entries(after_entries).expect("order entries");
-    // Changed from 0. 
+    // Changed from 0.
     //
     // The entry struct was 12 bytes against a declared blockLength
     // of 16, so anything past the first entry was read at the wrong offset and this looked empty
@@ -267,7 +270,7 @@ fn template_47_roundtrip() {
         out.extend_from_slice(entries.header.as_bytes());
         let entry_len = group_entry_len(
             entries.header.block_length.get(),
-            inc_book::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize,
+            inc_book::NoMDEntriesGroupBuilder::<'_>::BLOCK_LENGTH as usize,
         );
         let mut iter = entries.iter();
         // Fixture roundtrip assumes current-schema fixed layout.
@@ -294,7 +297,7 @@ fn template_48_roundtrip() {
         out.extend_from_slice(entries.header.as_bytes());
         let entry_len = group_entry_len(
             entries.header.block_length.get(),
-            trade_summary::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize,
+            trade_summary::NoMDEntriesGroupBuilder::<'_>::BLOCK_LENGTH as usize,
         );
         let mut iter = entries.iter();
         // Fixture roundtrip assumes current-schema fixed layout.
@@ -309,7 +312,7 @@ fn template_48_roundtrip() {
         out.extend_from_slice(order_entries.header.as_bytes());
         let order_len = group_entry_len(
             order_entries.header.block_length.get(),
-            trade_summary::NoOrderIDEntriesGroupBuilder::BLOCK_LENGTH as usize,
+            trade_summary::NoOrderIDEntriesGroupBuilder::<'_>::BLOCK_LENGTH as usize,
         );
         let mut order_iter = order_entries.iter();
         // Fixture roundtrip assumes current-schema fixed layout.
@@ -336,7 +339,7 @@ fn template_51_roundtrip() {
         out.extend_from_slice(entries.header.as_bytes());
         let entry_len = group_entry_len(
             entries.header.block_length.get(),
-            session_stats::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize,
+            session_stats::NoMDEntriesGroupBuilder::<'_>::BLOCK_LENGTH as usize,
         );
         let mut iter = entries.iter();
         // Fixture roundtrip assumes current-schema fixed layout.
@@ -427,7 +430,7 @@ fn template_47_builder_roundtrip() {
             msg.match_event_indicator.0,
         );
 
-        let entry_len = inc_book::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize;
+        let entry_len = inc_book::NoMDEntriesGroupBuilder::<'_>::BLOCK_LENGTH as usize;
         let base = view.acting_block_length + inc_book::NoMDEntriesGroupBuilder::HEADER_SIZE;
         let mut iter = entries.iter();
         for (index, entry) in iter.by_ref().enumerate() {
@@ -504,7 +507,7 @@ fn template_48_builder_roundtrip() {
             msg.match_event_indicator.0,
         );
 
-        let entry_len = trade_summary::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize;
+        let entry_len = trade_summary::NoMDEntriesGroupBuilder::<'_>::BLOCK_LENGTH as usize;
         let base = view.acting_block_length + trade_summary::NoMDEntriesGroupBuilder::HEADER_SIZE;
         let mut iter = entries.iter();
         for (index, entry) in iter.by_ref().enumerate() {
@@ -567,7 +570,7 @@ fn template_51_builder_roundtrip() {
             msg.match_event_indicator.0,
         );
 
-        let entry_len = session_stats::NoMDEntriesGroupBuilder::BLOCK_LENGTH as usize;
+        let entry_len = session_stats::NoMDEntriesGroupBuilder::<'_>::BLOCK_LENGTH as usize;
         let base = view.acting_block_length + session_stats::NoMDEntriesGroupBuilder::HEADER_SIZE;
         let mut iter = entries.iter();
         for (index, entry) in iter.by_ref().enumerate() {
@@ -602,7 +605,7 @@ fn instrument_definition_spread56_constants_do_not_affect_layout_or_view_access(
     );
     assert_eq!(
         mem::size_of::<spread_def::NoLegsEntry>(),
-        spread_def::NoLegsGroupBuilder::BLOCK_LENGTH as usize
+        spread_def::NoLegsGroupBuilder::<'_>::BLOCK_LENGTH as usize
     );
 
     let body = vec![0u8; spread_def::MDInstrumentDefinitionSpread56::BLOCK_LENGTH as usize];
@@ -662,11 +665,10 @@ fn instrument_definition_spread56_no_legs_parses_when_group_block_length_is_shor
 fn slice_getter_matches_the_iterator() {
     // a slice steps by size_of and the wire steps by blockLength; these disagreed until the
     // entry struct was padded out to the declared block
-    let whole =
-        trade_summary::MDIncrementalRefreshTradeSummary48Ref::parse_message(sbe_message(
-            TEMPLATE_48_PACKET,
-        ))
-        .expect("whole message");
+    let whole = trade_summary::MDIncrementalRefreshTradeSummary48Ref::parse_message(sbe_message(
+        TEMPLATE_48_PACKET,
+    ))
+    .expect("whole message");
     let (_p, msg_hdr, body) = parse_single_message(TEMPLATE_48_PACKET);
     let (_, after_fixed) = trade_summary::parse_with_header(body, &msg_hdr).expect("parse");
     let entries = trade_summary::parse_no_md_entries(after_fixed).expect("entries");
@@ -679,16 +681,18 @@ fn slice_getter_matches_the_iterator() {
         .iter()
         .map(|e| e.order_id.get())
         .collect();
-    assert_eq!(by_iter, by_slice, "slice getter must agree with the iterator");
+    assert_eq!(
+        by_iter, by_slice,
+        "slice getter must agree with the iterator"
+    );
 }
 
 #[test]
 fn whole_message_agrees_with_the_iterator() {
-    let whole =
-        trade_summary::MDIncrementalRefreshTradeSummary48Ref::parse_message(sbe_message(
-            TEMPLATE_48_PACKET,
-        ))
-        .expect("whole message");
+    let whole = trade_summary::MDIncrementalRefreshTradeSummary48Ref::parse_message(sbe_message(
+        TEMPLATE_48_PACKET,
+    ))
+    .expect("whole message");
     let (_p, msg_hdr, body) = parse_single_message(TEMPLATE_48_PACKET);
 
     assert_eq!(whole.transact_time.get(), 1_689_544_800_000_000_000);
@@ -705,7 +709,11 @@ fn whole_message_agrees_with_the_iterator() {
     );
     let orders = trade_summary::parse_no_order_id_entries(it.remainder()).expect("orders");
     let by_iter: Vec<_> = orders.iter().map(|e| e.body.order_id.get()).collect();
-    let by_whole: Vec<_> = whole.no_order_id_entries.iter().map(|e| e.order_id.get()).collect();
+    let by_whole: Vec<_> = whole
+        .no_order_id_entries
+        .iter()
+        .map(|e| e.order_id.get())
+        .collect();
     assert_eq!(by_iter, by_whole);
 
     let owned = whole.to_owned();
@@ -723,11 +731,7 @@ fn whole_message_to_json() {
     ))
     .unwrap();
 
-
-    assert_eq!(
-        whole.no_md_entries[0].md_entry_px.get(),
-        fpdec!(30500)
-    );
+    assert_eq!(whole.no_md_entries[0].md_entry_px.get(), fpdec!(30500));
 
     assert_eq!(
         serde_json::to_value(whole).unwrap(),
@@ -752,7 +756,6 @@ fn whole_message_to_json() {
         })
     );
 }
-
 
 #[test]
 fn json_roundtrips_through_the_owned_message() {

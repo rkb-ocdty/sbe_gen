@@ -254,7 +254,7 @@ impl<'a> Emit<'a> {
             let (name, length_ty) = (&d.name, &d.length_ty);
             quote! {
                 pub fn #name(&mut self, bytes: &[u8]) -> Result<&mut Self, ::sbe_support::EncodeError> {
-                    ::sbe_support::write_var_data::<#length_ty>(&mut self.buf, bytes)?;
+                    ::sbe_support::write_var_data::<#length_ty, _>(&mut self.buf, bytes)?;
                     Ok(self)
                 }
             }
@@ -412,7 +412,7 @@ impl<'a> Emit<'a> {
             let (name, length_ty) = (&d.name, &d.length_ty);
             quote! {
                 pub fn #name(&mut self, bytes: &[u8]) -> Result<&mut Self, ::sbe_support::EncodeError> {
-                    ::sbe_support::write_var_data::<#length_ty>(&mut *self.buf, bytes)?;
+                    ::sbe_support::write_var_data::<#length_ty, _>(&mut *self.buf, bytes)?;
                     Ok(self)
                 }
             }

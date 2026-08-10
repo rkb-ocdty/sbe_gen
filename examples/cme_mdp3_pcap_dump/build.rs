@@ -107,8 +107,8 @@ fn run_generator(
     output: &Path,
     opts: &GeneratorOptions,
 ) -> Result<(), Box<dyn Error>> {
-    let serde = DeriveSerialize::default()
-        .map_semantic("UTCTimestamp", "crate::json_types::utc_timestamp");
+    let serde =
+        DeriveSerialize::default().map_semantic("UTCTimestamp", "crate::json_types::utc_timestamp");
     generate_to_with(schema, output, opts, &[&serde]).map_err(|e| {
         format!(
             "sbe_gen failed for schema {} -> {}: {}",
