@@ -405,7 +405,17 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
                     body: &'a [u8],
                     header: &::sbe_support::MessageHeader,
                 ) -> Option<Self> {
-                    let written = header.block_length.get() as usize;
+                    Self::parse_framed(body, header)
+                }
+
+                /// the same behind a header of the caller's own. Concrete above, generic here:
+                /// `&&MessageHeader` coerces to `&MessageHeader` and does not unify with a `&H`,
+                /// so a caller that already holds a reference keeps compiling
+                pub fn parse_framed<H: ::sbe_support::Header>(
+                    body: &'a [u8],
+                    header: &H,
+                ) -> Option<Self> {
+                    let written = ::sbe_support::Header::block_length(header) as usize;
                     if written < core::mem::size_of::<#name>() {
                         return None;
                     }
@@ -418,8 +428,16 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
 
                 /// the same, reading the header off the front of `buf`
                 pub fn parse_message(buf: &'a [u8]) -> Option<Self> {
-                    let (header, body) = ::sbe_support::MessageHeader::parse_prefix(buf)?;
-                    Self::parse(body, header)
+                    Self::parse_message_framed::<::sbe_support::MessageHeader>(buf)
+                }
+
+                /// the same, reading a frame of the caller's own off the front. A default on a
+                /// function's type parameter is not a thing rustc has, so the plain one above is it
+                pub fn parse_message_framed<H: ::sbe_support::Header + 'a>(
+                    buf: &'a [u8],
+                ) -> Option<Self> {
+                    let (header, body) = ::sbe_support::parse_prefix::<H>(buf)?;
+                    Self::parse_framed(body, header)
                 }
             }
         }
@@ -442,11 +460,18 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
                 body: &'a [u8],
                 header: &::sbe_support::MessageHeader,
             ) -> Option<(#view<'a>, &'a [u8])> {
-                let mut acting_block_length = header.block_length.get() as usize;
+                parse_with_framed_header(body, header)
+            }
+
+            pub fn parse_with_framed_header<'a, H: ::sbe_support::Header>(
+                body: &'a [u8],
+                header: &H,
+            ) -> Option<(#view<'a>, &'a [u8])> {
+                let mut acting_block_length = ::sbe_support::Header::block_length(header) as usize;
                 if acting_block_length == 0 {
                     acting_block_length = #name::BLOCK_LENGTH as usize;
                 }
-                let acting_version = header.version.get();
+                let acting_version = ::sbe_support::Header::version(header);
                 let parsed = #body::parse(body, acting_block_length)?;
                 let (_, rest) = body.split_at(acting_block_length);
                 let view = #view { body: parsed, tail: rest, acting_block_length, acting_version };

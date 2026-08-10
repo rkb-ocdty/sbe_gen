@@ -161,7 +161,7 @@ impl<'a> Emit<'a> {
             #shared
             #(pub mod #modules;)*
 
-            pub use ::sbe_support::{self, MessageHeader};
+            pub use ::sbe_support::{self, MessageHeader, framed};
             #(#reexports)*
         }
     }

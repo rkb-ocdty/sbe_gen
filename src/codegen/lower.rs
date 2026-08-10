@@ -247,7 +247,9 @@ fn field_view(
             TypeDef::Enum(EnumDef { encoding, .. }) | TypeDef::Set(SetDef { encoding, .. }),
         ) = schema.types.get(&field.ty)
         {
-            let field_ty = schema_path(&field.ty).to_token_stream();
+            // `resolved`, not the schema's own path: a type_map substitution has to reach the
+            // accessor's return type too, or the field and the accessor disagree
+            let field_ty = resolved.to_token_stream();
             let Some(prim) = encoding_primitive(encoding, &schema.types) else {
                 break 'value plain(field_ty);
             };

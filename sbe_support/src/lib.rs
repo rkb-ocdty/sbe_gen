@@ -69,6 +69,81 @@ impl MessageHeader {
     }
 }
 
+/// What a reader needs off whatever precedes the block. A feed that frames its messages wraps
+/// the schema's header in its own — a length, a report count, a session prefix — and the wrapper
+/// is one repr(C) struct, so it is read in the same pass and answers these two itself.
+pub trait Header: FromBytes + KnownLayout + Immutable + Unaligned + Sized {
+    fn block_length(&self) -> u16;
+    fn version(&self) -> u16;
+}
+
+impl Header for MessageHeader {
+    #[inline]
+    fn block_length(&self) -> u16 {
+        self.block_length.get()
+    }
+    #[inline]
+    fn version(&self) -> u16 {
+        self.version.get()
+    }
+}
+
+/// A header behind something else on the wire. `#[repr(C)]` over unaligned members is the
+/// concatenation, so nesting these is how a frame is spelled rather than a hand-counted offset.
+#[repr(C)]
+#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]
+pub struct Prefixed<P, H> {
+    pub prefix: P,
+    pub header: H,
+}
+
+/// A header with more of the frame's own fields trailing it.
+#[repr(C)]
+#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]
+pub struct Suffixed<H, S> {
+    pub header: H,
+    pub suffix: S,
+}
+
+impl<P, H> Header for Prefixed<P, H>
+where
+    P: FromBytes + KnownLayout + Immutable + Unaligned,
+    H: Header,
+{
+    #[inline]
+    fn block_length(&self) -> u16 {
+        self.header.block_length()
+    }
+    #[inline]
+    fn version(&self) -> u16 {
+        self.header.version()
+    }
+}
+
+impl<H, S> Header for Suffixed<H, S>
+where
+    H: Header,
+    S: FromBytes + KnownLayout + Immutable + Unaligned,
+{
+    #[inline]
+    fn block_length(&self) -> u16 {
+        self.header.block_length()
+    }
+    #[inline]
+    fn version(&self) -> u16 {
+        self.header.version()
+    }
+}
+
+/// The frames a feed actually puts in front of a message, spelled once.
+pub mod framed {
+    pub use super::{Header, MessageHeader, Prefixed, Suffixed};
+
+    /// a u16 message length then the header, which is how CME frames anything it doesn't
+    /// datagram-delimit: iLink3, the TCP recovery channels and the secdef files
+    pub type LengthPrefixed = Prefixed<zerocopy::byteorder::little_endian::U16, MessageHeader>;
+}
+
 /// The block at the front of `body`, and whatever follows it.
 #[inline]
 pub fn parse_prefix<T: FromBytes + KnownLayout + Immutable>(body: &[u8]) -> Option<(&T, &[u8])> {

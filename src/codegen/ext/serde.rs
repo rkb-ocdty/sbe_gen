@@ -179,6 +179,12 @@ impl Derivation for DeriveSerialize {
     fn type_items(&self, _def: &TypeDef, items: &mut [Item]) -> Result<(), CodegenError> {
         const WIRE: [&str; 8] = ["u8", "i8", "U16", "U32", "U64", "I16", "I32", "I64"];
         for item in items {
+            // a value enum's variants are units, so the derive alone spells them by name
+            if let Item::Enum(e) = item {
+                e.attrs
+                    .push(parse_quote!(#[derive(serde::Serialize, serde::Deserialize)]));
+                continue;
+            }
             let Item::Struct(s) = item else { continue };
             s.attrs
                 .push(parse_quote!(#[derive(serde::Serialize, serde::Deserialize)]));
