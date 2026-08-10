@@ -74,12 +74,13 @@ fn group_entry_len(block_length: u16, declared: usize) -> usize {
     }
 }
 
-fn rebuild_payload(
+fn rebuild_payload<B: AsRef<[u8]>>(
     payload: &[u8],
-    rebuild_body: impl FnOnce(&MessageHeader, &[u8]) -> sbe_support::Vec<u8>,
+    rebuild_body: impl FnOnce(&MessageHeader, &[u8]) -> B,
 ) {
     let (pkt_hdr, msg_hdr, body) = parse_single_message(payload);
     let rebuilt_body = rebuild_body(&msg_hdr, body);
+    let rebuilt_body = rebuilt_body.as_ref();
     let msg_len = mem::size_of::<CmeMessageHeader>() + rebuilt_body.len();
     let cme_hdr = CmeMessageHeader {
         msg_len: U16::new(msg_len as u16),
@@ -270,7 +271,7 @@ fn template_47_roundtrip() {
         out.extend_from_slice(entries.header.as_bytes());
         let entry_len = group_entry_len(
             entries.header.block_length.get(),
-            inc_book::NoMDEntriesGroupBuilder::<'_>::BLOCK_LENGTH as usize,
+            inc_book::NoMDEntriesEntry::BLOCK_LENGTH as usize,
         );
         let mut iter = entries.iter();
         // Fixture roundtrip assumes current-schema fixed layout.
@@ -297,7 +298,7 @@ fn template_48_roundtrip() {
         out.extend_from_slice(entries.header.as_bytes());
         let entry_len = group_entry_len(
             entries.header.block_length.get(),
-            trade_summary::NoMDEntriesGroupBuilder::<'_>::BLOCK_LENGTH as usize,
+            trade_summary::NoMDEntriesEntry::BLOCK_LENGTH as usize,
         );
         let mut iter = entries.iter();
         // Fixture roundtrip assumes current-schema fixed layout.
@@ -312,7 +313,7 @@ fn template_48_roundtrip() {
         out.extend_from_slice(order_entries.header.as_bytes());
         let order_len = group_entry_len(
             order_entries.header.block_length.get(),
-            trade_summary::NoOrderIDEntriesGroupBuilder::<'_>::BLOCK_LENGTH as usize,
+            trade_summary::NoOrderIDEntriesEntry::BLOCK_LENGTH as usize,
         );
         let mut order_iter = order_entries.iter();
         // Fixture roundtrip assumes current-schema fixed layout.
@@ -339,7 +340,7 @@ fn template_51_roundtrip() {
         out.extend_from_slice(entries.header.as_bytes());
         let entry_len = group_entry_len(
             entries.header.block_length.get(),
-            session_stats::NoMDEntriesGroupBuilder::<'_>::BLOCK_LENGTH as usize,
+            session_stats::NoMDEntriesEntry::BLOCK_LENGTH as usize,
         );
         let mut iter = entries.iter();
         // Fixture roundtrip assumes current-schema fixed layout.
@@ -430,8 +431,8 @@ fn template_47_builder_roundtrip() {
             msg.match_event_indicator.0,
         );
 
-        let entry_len = inc_book::NoMDEntriesGroupBuilder::<'_>::BLOCK_LENGTH as usize;
-        let base = view.acting_block_length + inc_book::NoMDEntriesGroupBuilder::HEADER_SIZE;
+        let entry_len = inc_book::NoMDEntriesEntry::BLOCK_LENGTH as usize;
+        let base = view.acting_block_length + inc_book::NoMDEntriesEntry::HEADER_SIZE;
         let mut iter = entries.iter();
         for (index, entry) in iter.by_ref().enumerate() {
             let entry_base = base + index * entry_len;
@@ -507,8 +508,8 @@ fn template_48_builder_roundtrip() {
             msg.match_event_indicator.0,
         );
 
-        let entry_len = trade_summary::NoMDEntriesGroupBuilder::<'_>::BLOCK_LENGTH as usize;
-        let base = view.acting_block_length + trade_summary::NoMDEntriesGroupBuilder::HEADER_SIZE;
+        let entry_len = trade_summary::NoMDEntriesEntry::BLOCK_LENGTH as usize;
+        let base = view.acting_block_length + trade_summary::NoMDEntriesEntry::HEADER_SIZE;
         let mut iter = entries.iter();
         for (index, entry) in iter.by_ref().enumerate() {
             let entry_base = base + index * entry_len;
@@ -570,8 +571,8 @@ fn template_51_builder_roundtrip() {
             msg.match_event_indicator.0,
         );
 
-        let entry_len = session_stats::NoMDEntriesGroupBuilder::<'_>::BLOCK_LENGTH as usize;
-        let base = view.acting_block_length + session_stats::NoMDEntriesGroupBuilder::HEADER_SIZE;
+        let entry_len = session_stats::NoMDEntriesEntry::BLOCK_LENGTH as usize;
+        let base = view.acting_block_length + session_stats::NoMDEntriesEntry::HEADER_SIZE;
         let mut iter = entries.iter();
         for (index, entry) in iter.by_ref().enumerate() {
             let entry_base = base + index * entry_len;
@@ -605,7 +606,7 @@ fn instrument_definition_spread56_constants_do_not_affect_layout_or_view_access(
     );
     assert_eq!(
         mem::size_of::<spread_def::NoLegsEntry>(),
-        spread_def::NoLegsGroupBuilder::<'_>::BLOCK_LENGTH as usize
+        spread_def::NoLegsEntry::BLOCK_LENGTH as usize
     );
 
     let body = vec![0u8; spread_def::MDInstrumentDefinitionSpread56::BLOCK_LENGTH as usize];

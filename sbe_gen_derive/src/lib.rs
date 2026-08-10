@@ -625,22 +625,34 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
             }
         });
 
-    let wire = block
-        .block_length
-        .filter(|_| block.message)
-        .map(|block_length| {
+    // a group entry carries its dimension's width for the same reason it carries BLOCK_LENGTH:
+    // reading either off the builder alias means naming the allocator as well
+    let header_size = block.dimension.as_ref().map(|dimension| {
+        quote! {
+            pub const HEADER_SIZE: usize = <#dimension as ::sbe_support::Dimension>::SIZE;
+        }
+    });
+    // a group entry gets BLOCK_LENGTH as well as a message: it is the group's stride, and the
+    // only other place it appears is a const generic on the builder alias, which cannot be read
+    // through the alias without naming the allocator too
+    let wire = block.block_length.map(|block_length| {
+        let ids = block.message.then(|| {
             let (template, schema, version) = (
                 block.template_id.unwrap_or(0),
                 block.schema_id.unwrap_or(0),
                 block.schema_version.unwrap_or(0),
             );
             quote! {
-                pub const BLOCK_LENGTH: u16 = #block_length;
                 pub const TEMPLATE_ID: u16 = #template;
                 pub const SCHEMA_ID: u16 = #schema;
                 pub const SCHEMA_VERSION: u16 = #version;
             }
         });
+        quote! {
+            pub const BLOCK_LENGTH: u16 = #block_length;
+            #ids
+        }
+    });
     let since = block
         .since_version
         .map(|v| quote! { pub const SINCE_VERSION: u32 = #v; });
@@ -689,6 +701,7 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
                 ::sbe_support::parse_prefix(body)
             }
             #wire
+            #header_size
             #since
             #semantic
             #constants
