@@ -10,7 +10,7 @@ use quote::{ToTokens, format_ident, quote};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt::Display;
-use syn::{Field as SynField, Item, ItemStruct, Path, Type, parse_quote};
+use syn::{Field as SynField, Item, ItemEnum, ItemStruct, Path, Type, parse_quote};
 use thiserror::Error;
 
 mod derive;

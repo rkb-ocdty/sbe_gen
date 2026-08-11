@@ -4,6 +4,9 @@
 //! of it varies with the schema, so it lives once, here, and the generated modules import it.
 
 pub use sbe_gen_derive::sbe_gen;
+// generated code derives strum through here: a consumer crate that never named strum itself
+// still gets the message enum's helpers
+pub use strum;
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -75,6 +78,14 @@ impl MessageHeader {
 pub trait Header: FromBytes + KnownLayout + Immutable + Unaligned + Sized {
     fn block_length(&self) -> u16;
     fn version(&self) -> u16;
+    fn template_id(&self) -> u16;
+}
+
+/// A frame that carries its own length, which is the only thing that makes a stream of them
+/// walkable: nothing in the block says where the var-data ends.
+pub trait Framing: Header {
+    /// the whole frame, this header included, which is how CME counts msgSize
+    fn frame_len(&self) -> usize;
 }
 
 impl Header for MessageHeader {
@@ -85,6 +96,10 @@ impl Header for MessageHeader {
     #[inline]
     fn version(&self) -> u16 {
         self.version.get()
+    }
+    #[inline]
+    fn template_id(&self) -> u16 {
+        self.template_id.get()
     }
 }
 
@@ -118,6 +133,17 @@ where
     fn version(&self) -> u16 {
         self.header.version()
     }
+    #[inline]
+    fn template_id(&self) -> u16 {
+        self.header.template_id()
+    }
+}
+
+impl<H: Header> Framing for Prefixed<U16, H> {
+    #[inline]
+    fn frame_len(&self) -> usize {
+        self.prefix.get() as usize
+    }
 }
 
 impl<H, S> Header for Suffixed<H, S>
@@ -133,11 +159,82 @@ where
     fn version(&self) -> u16 {
         self.header.version()
     }
+    #[inline]
+    fn template_id(&self) -> u16 {
+        self.header.template_id()
+    }
+}
+
+impl<H, S> Framing for Suffixed<H, S>
+where
+    H: Framing,
+    S: FromBytes + KnownLayout + Immutable + Unaligned,
+{
+    #[inline]
+    fn frame_len(&self) -> usize {
+        self.header.frame_len()
+    }
+}
+
+/// A message the way it sits on the wire: the frame's header, then the block, contiguous. One
+/// borrow reaches both, so nothing carries a second pointer for the header.
+#[repr(C)]
+#[derive(Debug, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned, Clone, Copy)]
+pub struct Framed<H, B: ?Sized> {
+    pub header: H,
+    pub block: B,
+}
+
+impl<H, B: ?Sized> AsRef<B> for Framed<H, B> {
+    #[inline]
+    fn as_ref(&self) -> &B {
+        &self.block
+    }
+}
+
+impl<H: FromBytes + KnownLayout + Immutable + Unaligned> Framed<H, [u8]> {
+    /// the frame as header plus however many bytes follow, which is the shape of a message this
+    /// build has no template for
+    #[inline]
+    pub fn from_frame(frame: &[u8]) -> Option<&Self> {
+        Self::ref_from_bytes(frame).ok()
+    }
+}
+
+/// A whole message borrowed out of the buffer: the block and every group of it. The derive
+/// implements `parse_framed` per message and everything else here is the framing, which does not
+/// vary, so a caller can be generic over messages instead of matching one by name.
+pub trait MessageRef<'a>: Sized {
+    const TEMPLATE_ID: u16;
+    const BLOCK_LENGTH: u16;
+
+    /// The message as written, or `None` if this build cannot read all of it: a writer on an
+    /// older schema stops its block short of a field this build knows about, and there is no
+    /// honest value to hand back for that.
+    fn parse_framed<H: Header>(body: &'a [u8], header: &H) -> Option<Self>;
+
+    #[inline]
+    fn parse(body: &'a [u8], header: &MessageHeader) -> Option<Self> {
+        Self::parse_framed(body, header)
+    }
+
+    /// the same, reading the header off the front of `buf`
+    #[inline]
+    fn parse_message(buf: &'a [u8]) -> Option<Self> {
+        Self::parse_message_framed::<MessageHeader>(buf)
+    }
+
+    /// the same, reading a frame of the caller's own off the front
+    #[inline]
+    fn parse_message_framed<H: Header + 'a>(buf: &'a [u8]) -> Option<Self> {
+        let (header, body) = parse_prefix::<H>(buf)?;
+        Self::parse_framed(body, header)
+    }
 }
 
 /// The frames a feed actually puts in front of a message, spelled once.
 pub mod framed {
-    pub use super::{Header, MessageHeader, Prefixed, Suffixed};
+    pub use super::{Framing, Header, MessageHeader, Prefixed, Suffixed};
 
     /// a u16 message length then the header, which is how CME frames anything it doesn't
     /// datagram-delimit: iLink3, the TCP recovery channels and the secdef files

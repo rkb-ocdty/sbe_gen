@@ -325,10 +325,7 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
         let name = &d.name;
         quote! { pub #name: ::sbe_support::VarData<'a>, }
     });
-    let whole = (block.message
-        && !block.group.is_empty()
-        && block.group.iter().all(|g| g.stride.is_some()))
-    .then(|| {
+    let whole = (block.message && block.group.iter().all(|g| g.stride.is_some())).then(|| {
         let msg = format_ident!("{name}Message");
         let (as_ref, owned) = (format_ident!("{name}Ref"), format_ident!("{name}Owned"));
         let groups: Vec<_> = block
@@ -345,9 +342,9 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
             .iter()
             .zip(&params)
             .map(|((_, e, _), p)| quote! { #p: AsRef<[#e]>, });
-        let borrowed = groups.iter().map(|(_, e, _)| quote! { &'a [#e] });
+        let borrowed: Vec<TokenStream> = groups.iter().map(|(_, e, _)| quote! { &'a [#e] }).collect();
         let owned_args = groups.iter().map(|(_, e, _)| quote! { Vec<#e> });
-        let walk = groups.iter().map(|(n, e, g)| {
+        let walk: Vec<TokenStream> = groups.iter().map(|(n, e, g)| {
             let (stride, dimension) = (g.stride, &g.dimension);
             quote! {
                 let (header, payload) =
@@ -360,8 +357,22 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
                 // the writer's own stride, which the schema can declare wider than the entry
                 tail = payload.get(count * ::sbe_support::Dimension::block_length(header)..)?;
             }
-        });
+        })
+        .collect();
         let names: Vec<_> = groups.iter().map(|(n, _, _)| n.clone()).collect();
+        // a message with no groups never walks, and binding a tail it does not read is a warning
+        let tail_bind = (!groups.is_empty()).then(|| {
+            quote! {
+                #[allow(unused_mut)]
+                let mut tail = body.get(written..)?;
+            }
+        });
+        let view_tail_bind = (!groups.is_empty()).then(|| {
+            quote! {
+                #[allow(unused_mut)]
+                let mut tail = self.tail;
+            }
+        });
 
         quote! {
             /// The whole message: its block, and every group.
@@ -395,23 +406,11 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
                 }
             }
 
-            impl<'a> #as_ref<'a> {
-                /// The message as written, or `None` if this build cannot read all of it.
-                ///
-                /// A writer on an older schema stops its block short of a field this build
-                /// knows about, and there is no honest value to hand back for it. Taking the
-                /// header is what makes a whole message the only thing this can hold.
-                pub fn parse(
-                    body: &'a [u8],
-                    header: &::sbe_support::MessageHeader,
-                ) -> Option<Self> {
-                    Self::parse_framed(body, header)
-                }
+            impl<'a> ::sbe_support::MessageRef<'a> for #as_ref<'a> {
+                const TEMPLATE_ID: u16 = #name::TEMPLATE_ID;
+                const BLOCK_LENGTH: u16 = #name::BLOCK_LENGTH;
 
-                /// the same behind a header of the caller's own. Concrete above, generic here:
-                /// `&&MessageHeader` coerces to `&MessageHeader` and does not unify with a `&H`,
-                /// so a caller that already holds a reference keeps compiling
-                pub fn parse_framed<H: ::sbe_support::Header>(
+                fn parse_framed<H: ::sbe_support::Header>(
                     body: &'a [u8],
                     header: &H,
                 ) -> Option<Self> {
@@ -420,24 +419,53 @@ fn expand(mut input: ItemStruct, block: Block) -> syn::Result<TokenStream> {
                         return None;
                     }
                     let (block, _) = ::sbe_support::parse_prefix::<#name>(body)?;
-                    #[allow(unused_mut)]
-                    let mut tail = body.get(written..)?;
+                    #tail_bind
                     #(#walk)*
                     Some(Self { block, #(#names,)* })
                 }
+            }
 
-                /// the same, reading the header off the front of `buf`
-                pub fn parse_message(buf: &'a [u8]) -> Option<Self> {
-                    Self::parse_message_framed::<::sbe_support::MessageHeader>(buf)
+            impl<'a> #view<'a> {
+                /// The same message as one borrow of the whole thing, walked from the tail the
+                /// view already holds. `None` when the writer's block stopped short of this
+                /// build's, which is the one state a Ref has no way to say.
+                pub fn whole(&self) -> Option<#as_ref<'a>> {
+                    let block = self.body.parsed?;
+                    #view_tail_bind
+                    #(#walk)*
+                    Some(#as_ref { block, #(#names,)* })
+                }
+            }
+
+            // callers had these as inherent and an inherent method wins resolution, so the trait
+            // being out of scope stays their problem to ignore rather than a broken call site
+            impl<'a> #as_ref<'a> {
+                #[inline]
+                pub fn parse(
+                    body: &'a [u8],
+                    header: &::sbe_support::MessageHeader,
+                ) -> Option<Self> {
+                    <Self as ::sbe_support::MessageRef<'a>>::parse(body, header)
                 }
 
-                /// the same, reading a frame of the caller's own off the front. A default on a
-                /// function's type parameter is not a thing rustc has, so the plain one above is it
+                #[inline]
+                pub fn parse_framed<H: ::sbe_support::Header>(
+                    body: &'a [u8],
+                    header: &H,
+                ) -> Option<Self> {
+                    <Self as ::sbe_support::MessageRef<'a>>::parse_framed(body, header)
+                }
+
+                #[inline]
+                pub fn parse_message(buf: &'a [u8]) -> Option<Self> {
+                    <Self as ::sbe_support::MessageRef<'a>>::parse_message(buf)
+                }
+
+                #[inline]
                 pub fn parse_message_framed<H: ::sbe_support::Header + 'a>(
                     buf: &'a [u8],
                 ) -> Option<Self> {
-                    let (header, body) = ::sbe_support::parse_prefix::<H>(buf)?;
-                    Self::parse_framed(body, header)
+                    <Self as ::sbe_support::MessageRef<'a>>::parse_message_framed::<H>(buf)
                 }
             }
         }

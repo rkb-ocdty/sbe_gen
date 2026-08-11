@@ -56,7 +56,7 @@ impl<'a> Emit<'a> {
                 .visit_shared_groups()?
                 .map(|body| self.module("groups.rs".to_string(), &[], body))
                 .transpose()?,
-            mod_rs: self.module("mod.rs".to_string(), &allows, self.visit_mod())?,
+            mod_rs: self.module("mod.rs".to_string(), &allows, self.visit_mod()?)?,
             derived: self.derived_modules()?,
             structs: self.structs.take(),
         })
@@ -135,7 +135,7 @@ impl<'a> Emit<'a> {
     }
 
     /// Generate the content of `mod.rs` re‑exporting messages and types.
-    fn visit_mod(&self) -> TokenStream {
+    fn visit_mod(&self) -> Result<TokenStream, CodegenError> {
         let modules = self
             .schema
             .messages
@@ -149,21 +149,182 @@ impl<'a> Emit<'a> {
                 pub use #module::#builder_ty;
             }
         });
+        let body_variants: Vec<_> = self
+            .schema
+            .messages
+            .iter()
+            .map(|msg| {
+                let (module, variant) = (msg.msg.name.snake_ident(), &msg.names.msg);
+                let held = match borrows_whole(msg) {
+                    true => &msg.names.msg_ref,
+                    false => &msg.names.view,
+                };
+                quote! { #variant(#module::#held<'a>), }
+            })
+            .collect();
+
+        let mut body: ItemEnum = parse_quote! {
+            /// Which message the frame turned out to be, and the borrow of it.
+            #[derive(
+                Debug,
+                Clone,
+                ::sbe_support::strum::EnumIs,
+                ::sbe_support::strum::EnumCount,
+                ::sbe_support::strum::IntoStaticStr,
+                ::sbe_support::strum::EnumDiscriminants,
+            )]
+            #[strum(crate = "::sbe_support::strum")]
+            #[strum_discriminants(name(Template), vis(pub))]
+            #[strum_discriminants(derive(
+                ::sbe_support::strum::EnumIter,
+                ::sbe_support::strum::EnumString,
+                ::sbe_support::strum::IntoStaticStr,
+                ::sbe_support::strum::Display,
+                Hash,
+                PartialOrd,
+                Ord,
+            ))]
+            #[strum_discriminants(strum(crate = "::sbe_support::strum"))]
+            pub enum Body<'a> {
+                #(#body_variants)*
+                /// no template for it in this build, and the frame holds the bytes anyway
+                Unknown,
+            }
+        };
+        self.derive_body_enum(&mut body)?;
+
         let shared = match self.schema.shared.is_empty() {
             true => quote!(),
             false => quote!(
                 pub mod groups;
             ),
         };
-        quote! {
+        let variants = self.schema.messages.iter().map(|msg| {
+            let (module, variant) = (msg.msg.name.snake_ident(), &msg.names.msg);
+            let held = match borrows_whole(msg) {
+                true => &msg.names.msg_ref,
+                // var-data or a group it cannot slice, so this one is walked rather than sliced
+                false => &msg.names.view,
+            };
+            quote! { #variant(#module::#held<'a>), }
+        });
+        let arms = self.schema.messages.iter().map(|msg| {
+            let (module, variant, msg_ty) =
+                (msg.msg.name.snake_ident(), &msg.names.msg, &msg.names.msg);
+            let parsed = match borrows_whole(msg) {
+                true => {
+                    let msg_ref = &msg.names.msg_ref;
+                    quote! {
+                        <#module::#msg_ref as ::sbe_support::MessageRef>::parse_framed(body, header)?
+                    }
+                }
+                false => quote! { #module::parse_with_framed_header(body, header)?.0 },
+            };
+            quote! { #module::#msg_ty::TEMPLATE_ID => Self::#variant(#parsed), }
+        });
+        let template_ids = self.schema.messages.iter().map(|msg| {
+            let (module, variant, msg_ty) =
+                (msg.msg.name.snake_ident(), &msg.names.msg, &msg.names.msg);
+            quote! { Self::#variant => Some(#module::#msg_ty::TEMPLATE_ID), }
+        });
+        let template_from_ids = self.schema.messages.iter().map(|msg| {
+            let (module, variant, msg_ty) =
+                (msg.msg.name.snake_ident(), &msg.names.msg, &msg.names.msg);
+            quote! { #module::#msg_ty::TEMPLATE_ID => Some(Self::#variant), }
+        });
+        Ok(quote! {
             pub mod types;
             pub mod message_header;
             #shared
             #(pub mod #modules;)*
 
-            pub use ::sbe_support::{self, MessageHeader, framed};
+            pub use ::sbe_support::{self, Framing, Header, MessageHeader, MessageRef, framed};
             #(#reexports)*
-        }
+
+            #body
+
+            impl<'a> Body<'a> {
+                pub fn parse(body: &'a [u8], header: &MessageHeader) -> Option<Self> {
+                    Self::parse_framed(body, header)
+                }
+
+                pub fn parse_framed<H: ::sbe_support::Header>(
+                    body: &'a [u8],
+                    header: &H,
+                ) -> Option<Self> {
+                    Some(match ::sbe_support::Header::template_id(header) {
+                        #(#arms)*
+                        _ => Self::Unknown,
+                    })
+                }
+            }
+
+            /// One message out of the stream: the frame it arrived in, and what that frame turned
+            /// out to hold. `frame` is a single borrow of `header ++ bytes` — the header carries
+            /// whatever the feed puts in front of the schema's four fields, and every borrow in
+            /// `body` points inside those same bytes.
+            #[derive(Debug, Clone)]
+            pub struct Message<'a, H = MessageHeader> {
+                pub frame: &'a ::sbe_support::Framed<H, [u8]>,
+                pub body: Body<'a>,
+            }
+
+            impl<'a, H: ::sbe_support::Header> Message<'a, H> {
+                /// `frame` starts at the header and runs to the end of this message, which is
+                /// what the feed's framing already told the caller.
+                pub fn parse_frame(frame: &'a [u8]) -> Option<Self> {
+                    let frame = ::sbe_support::Framed::<H, [u8]>::from_frame(frame)?;
+                    let body = Body::parse_framed(&frame.block, &frame.header)?;
+                    Some(Self { frame, body })
+                }
+            }
+
+            impl Template {
+                /// `None` for `Unknown`, which is the one variant that is not a template
+                pub const fn template_id(self) -> Option<u16> {
+                    match self {
+                        #(#template_ids)*
+                        Self::Unknown => None,
+                    }
+                }
+
+                pub const fn from_template_id(template_id: u16) -> Option<Self> {
+                    match template_id {
+                        #(#template_from_ids)*
+                        _ => None,
+                    }
+                }
+            }
+
+            /// A packet's worth of frames. `rest` is what is left unread, which after the
+            /// iterator stops is either empty or the truncated tail that stopped it.
+            pub struct Messages<'a, H> {
+                pub rest: &'a [u8],
+                frame: core::marker::PhantomData<H>,
+            }
+
+            /// the frames in `buf`, behind the usual u16 length prefix
+            pub fn messages(buf: &[u8]) -> Messages<'_, ::sbe_support::framed::LengthPrefixed> {
+                messages_framed(buf)
+            }
+
+            /// the same behind a frame of the caller's own
+            pub fn messages_framed<H: ::sbe_support::Framing>(buf: &[u8]) -> Messages<'_, H> {
+                Messages { rest: buf, frame: core::marker::PhantomData }
+            }
+
+            impl<'a, H: ::sbe_support::Framing + 'a> Iterator for Messages<'a, H> {
+                type Item = Message<'a, H>;
+
+                fn next(&mut self) -> Option<Message<'a, H>> {
+                    let (header, _) = ::sbe_support::parse_prefix::<H>(self.rest)?;
+                    let frame_len = ::sbe_support::Framing::frame_len(header);
+                    let frame = self.rest.get(..frame_len)?;
+                    self.rest = self.rest.get(frame_len..)?;
+                    Message::parse_frame(frame)
+                }
+            }
+        })
     }
 
     /// Generate the `types.rs` module containing definitions of enums, sets and composites.
@@ -192,6 +353,7 @@ impl<'a> Emit<'a> {
                     builder: builder_name,
                     encoder: encoder_name,
                     view: view_name,
+                    msg_ref: _,
                 },
             block_length: msg_block_length,
             fields,
@@ -534,6 +696,18 @@ fn impl_of(target: TokenStream, members: Vec<TokenStream>) -> TokenStream {
 /// One `group(..)` per repeating group, in wire order. A stride is only given where every
 /// entry is the same width; without one the group cannot be handed back as a slice, and nor
 /// can any group behind it, because stepping over it reads a width that is not there.
+/// A group whose entries are all one width, which is what lets it be read as a slice rather than
+/// walked. Var-data or a nested group inside the entry is what takes that away.
+fn strided(g: &PlacedGroup) -> bool {
+    g.data.is_empty() && g.groups.is_empty()
+}
+
+/// Whether the derive gives this message a `Ref`, and whether that `Ref` holds all of it: every
+/// group as a slice, and no trailing var-data for it to drop on the floor.
+fn borrows_whole(msg: &PlacedMessage) -> bool {
+    msg.data.is_empty() && msg.groups.iter().all(strided)
+}
+
 fn group_keys(groups: &[PlacedGroup], order: &[usize]) -> TokenStream {
     groups
         .iter()
@@ -541,8 +715,7 @@ fn group_keys(groups: &[PlacedGroup], order: &[usize]) -> TokenStream {
         .map(|(g, order)| {
             let (ty, dimension) = (g.group.name.type_ident(), g.dimension.clone());
             let name = g.group.name.snake_ident();
-            let stride = (g.data.is_empty() && g.groups.is_empty())
-                .then(|| g.struct_size.max(g.block_length));
+            let stride = strided(g).then(|| g.struct_size.max(g.block_length));
             let stride = stride.map(|s| quote!(stride = #s,));
             quote!(group(order = #order, name = #name, ty = #ty, dimension = #dimension, #stride),)
         })

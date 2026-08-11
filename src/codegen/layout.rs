@@ -244,6 +244,7 @@ pub struct MessageNames {
     pub builder: Ident,
     pub encoder: Ident,
     pub view: Ident,
+    pub msg_ref: Ident,
 }
 
 #[derive(Drive)]
@@ -416,6 +417,7 @@ impl Place {
                 builder: format_ident!("{}Builder", name),
                 encoder: format_ident!("{}Encoder", name),
                 view: format_ident!("{}View", name),
+                msg_ref: format_ident!("{}Ref", name),
                 msg: name,
             },
             block_length: declared_or_placed(msg.msg.block_length, fields_end(&fields)),

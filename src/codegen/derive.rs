@@ -47,6 +47,16 @@ pub trait Derivation {
         Ok(())
     }
 
+    /// The union of every message in the schema, before it is written out. Mutable, so a step can
+    /// push a derive or a container attribute onto it the way it does for a block.
+    fn body_enum(
+        &self,
+        _schema: &LaidOutSchema,
+        _item: &mut ItemEnum,
+    ) -> Result<(), CodegenError> {
+        Ok(())
+    }
+
     /// the same, for a group's entry struct
     fn group_struct(
         &self,
@@ -97,6 +107,12 @@ impl Emit<'_> {
         self.derivations
             .iter()
             .try_for_each(|d| d.message_struct(msg, item))
+    }
+
+    pub(crate) fn derive_body_enum(&self, item: &mut ItemEnum) -> Result<(), CodegenError> {
+        self.derivations
+            .iter()
+            .try_for_each(|d| d.body_enum(self.schema, item))
     }
 
     pub(crate) fn derive_group_struct(

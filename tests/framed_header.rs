@@ -79,6 +79,11 @@ fn write_generated(out_dir: &Path, xml: &str) -> TempDir {
             let (view, _) = order::parse_with_framed_header(&body, &frame).expect("framed view");
             assert_eq!(view.id().expect("id").get(), 7);
 
+            // the view walked into one borrow of the whole message
+            let whole = view.whole().expect("whole");
+            assert_eq!(whole.id.get(), 7);
+            assert_eq!(whole.no_fills[0].fill_id.get(), 9);
+
             let mut prefixed = Plain { prefix: U16::new(body.len() as u16), header: header() }.as_bytes().to_vec();
             prefixed.extend_from_slice(&body);
             let msg = OrderRef::parse_message_framed::<Plain>(&prefixed).expect("length-prefixed parse");
